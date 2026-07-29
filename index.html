@@ -13,6 +13,15 @@
 <meta name="apple-mobile-web-app-title" content="Mesa">
 <link rel="apple-touch-icon" href="icon-192.png">
 <!--
+  v13.0 — Resumen DOCX de Notas (solo desktop):
+  1. Botón nuevo en header global (oculto en mobile, breakpoint 720px)
+  2. Modal: Fecha desde/hasta (vacío = todo) + filtro de texto (AND de palabras)
+  3. Parser HTML→DOCX client-side: nota-horario como badge + [ETIQUETA],
+     <strong>/<em> respetados, marca-pill como badges de color, agrupado por día
+  4. docx@7.1.0 vía unpkg — mismo criterio que MDtoDOCX (footer con nombre + pág. n/nn)
+  GAS: mesa_v13_0.gs (nueva acción getNotasResumen)
+-->
+<!--
   v12.5 — Cambios respecto a v12.4:
   1. Selectores INICIO y DURACIÓN en pasos de 15 min (INICIO: 00:00→23:45, DURACIÓN: 0:15→4:00)
   2. Al finalizar ciclo Pomodoro, se inserta en Quill en itálica: [HH:MM → HH:MM, N min]
@@ -69,6 +78,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+<!-- v13.0: Resumen DOCX de Notas — generación 100% client-side -->
+<script src="https://unpkg.com/docx@7.1.0/build/index.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 /* ─────────────────────────────────────────────────
@@ -234,6 +245,116 @@ a { color: inherit; text-decoration: none; }
   transition   : all .15s;
 }
 .hdr-refresh:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+/* v13.0: Resumen DOCX — botón header (desktop only) */
+.hdr-resumen-docx {
+  background   : transparent;
+  border       : 1px solid rgba(255,255,255,.18);
+  color        : rgba(255,255,255,.6);
+  border-radius: var(--radius-sm);
+  padding      : 5px 10px;
+  font-size    : .72rem;
+  display      : flex;
+  align-items  : center;
+  gap          : 5px;
+  cursor       : pointer;
+  font-family  : inherit;
+  transition   : all .15s;
+}
+.hdr-resumen-docx:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+/* v13.0: Modal Resumen DOCX */
+#resumen-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(15,23,42,.55);
+  z-index: 500;
+  align-items: center;
+  justify-content: center;
+}
+#resumen-overlay.visible { display: flex; }
+#resumen-modal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  width: 420px;
+  max-width: 92vw;
+  padding: 22px;
+}
+#resumen-modal .rm-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.15rem;
+  letter-spacing: 1px;
+  color: var(--accent2);
+  margin-bottom: 4px;
+}
+#resumen-modal .rm-sub {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+#resumen-modal label {
+  display: block;
+  font-size: .72rem;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+  margin-top: 12px;
+}
+#resumen-modal .rm-fechas {
+  display: flex;
+  gap: 10px;
+}
+#resumen-modal input[type="date"],
+#resumen-modal input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  font-size: .82rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+}
+#resumen-modal .rm-hint {
+  font-size: .68rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+#resumen-modal .rm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+#resumen-modal .rm-btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  font-size: .8rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+#resumen-modal .rm-btn-generar {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: .8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+#resumen-modal .rm-btn-generar:disabled { opacity: .55; cursor: default; }
+#resumen-modal .rm-status {
+  font-size: .74rem;
+  color: var(--muted);
+  margin-top: 10px;
+  min-height: 16px;
+}
 .btn-instalar-pwa {
   background   : transparent;
   border       : 1px solid rgba(217,119,6,.7);
@@ -1113,6 +1234,8 @@ a { color: inherit; text-decoration: none; }
   .hdr-logo    { display: none; }
   .hdr-name    { display: none; }
   .hdr-refran  { display: none; }
+  /* v13.0: Resumen DOCX es funcionalidad solo desktop */
+  .hdr-resumen-docx { display: none; }
   /* versión: se mueve al lado del emoji como badge compacto */
   .hdr-version {
     font-size  : .62rem;
@@ -1792,7 +1915,7 @@ a { color: inherit; text-decoration: none; }
   <div class="login-box">
     <span class="login-emoji" id="login-emoji">🗂️</span>
     <div class="login-logo" id="login-logo">MESA DE TRABAJO</div>
-    <div class="login-sub">v12.5 · Workspace personal</div>
+    <div class="login-sub">v13.0 · Workspace personal</div>
     <div class="login-title">Accedé con tu cuenta Google</div>
     <div class="login-desc">
       Solo cuentas autorizadas por el administrador<br>
@@ -1825,7 +1948,7 @@ a { color: inherit; text-decoration: none; }
     <!-- hdr-logo y hdr-name se ocultan en mobile por CSS (mejora C) -->
     <span class="hdr-logo" id="hdr-logo">MESA DE TRABAJO</span>
     <span class="hdr-name" id="hdr-nombre"></span>
-    <span class="hdr-version">v12.5</span>
+    <span class="hdr-version">v13.0</span>
     <span class="hdr-sep"></span>
     <span class="hdr-refran" id="hdr-refran"></span>
     <button class="btn-instalar-pwa" id="btn-instalar-pwa" title="Instalar app" style="display:none" onclick="instalarPWA()">
@@ -1835,6 +1958,12 @@ a { color: inherit; text-decoration: none; }
       Instalar
     </button>
     <span id="auth-status" title="Sesión activa"></span>
+    <button class="hdr-resumen-docx" id="btn-resumen-docx" onclick="abrirResumenModal()" title="Generar resumen en DOCX">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      Resumen
+    </button>
     <button class="hdr-refresh" id="btn-refresh" onclick="cargarDatos(true)" title="Actualizar">
       <svg id="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -2059,6 +2188,31 @@ a { color: inherit; text-decoration: none; }
   </div>
 </div>
 
+<!-- v13.0: Modal Resumen DOCX (desktop only) -->
+<div id="resumen-overlay" onclick="if(event.target===this) cerrarResumenModal()">
+  <div id="resumen-modal" role="dialog" aria-label="Resumen DOCX de Notas">
+    <div class="rm-title">📄 Resumen DOCX</div>
+    <div class="rm-sub">Generá un documento Word con las notas del período y filtro elegidos.</div>
+
+    <label>Rango de fechas (vacío = todo)</label>
+    <div class="rm-fechas">
+      <input type="date" id="rm-fecha-desde">
+      <input type="date" id="rm-fecha-hasta">
+    </div>
+
+    <label>Filtro de texto</label>
+    <input type="text" id="rm-filtro" placeholder="ej: 1316 costos indirectos">
+    <div class="rm-hint">Busca notas que contengan TODAS las palabras (AND), sin importar mayúsculas.</div>
+
+    <div class="rm-status" id="rm-status"></div>
+
+    <div class="rm-actions">
+      <button class="rm-btn-cancel" onclick="cerrarResumenModal()">Cancelar</button>
+      <button class="rm-btn-generar" id="rm-btn-generar" onclick="generarResumenDocx()">Generar DOCX</button>
+    </div>
+  </div>
+</div>
+
 <!-- Notificación ciclo completado -->
 <div id="reg-notif">🍅 ¿Terminaste la tarea? — <button onclick="finalizarTarea()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:.78rem;cursor:pointer;font-family:inherit;margin-left:8px;">Finalizar</button> <button onclick="continuarTarea()" style="background:transparent;color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:.78rem;cursor:pointer;font-family:inherit;margin-left:4px;">Continuar</button></div>
 
@@ -2113,7 +2267,7 @@ a { color: inherit; text-decoration: none; }
 ────────────────────────────────────────────── */
 const GAS_URL    = 'https://script.google.com/macros/s/AKfycbzhcy1THlO2qwvx8clyaHRN2xAG8hX6rTsXelELjGBA83gm_358f68BHjLJbbX_tTjB/exec';
 const CLIENT_ID  = '174536806740-aus6npjphhdcn5nkgtt1ejl0tcj16ou7.apps.googleusercontent.com';
-const VERSION_UI = 'v12.5b';
+const VERSION_UI = 'v13.0';
 
 /* ──────────────────────────────────────────────
    COLORES POSTITS
@@ -3868,6 +4022,216 @@ function instalarPWA() {
     const btn = document.getElementById('btn-instalar-pwa');
     if (btn) btn.style.display = 'none';
   });
+}
+
+/* ──────────────────────────────────────────────
+   RESUMEN DOCX DE NOTAS — v13.0 (desktop only)
+   Parser HTML→DOCX 100% client-side, sobre el
+   Contenido (HTML) tal cual viene de la columna D.
+────────────────────────────────────────────── */
+function abrirResumenModal() {
+  if (esMobile()) return; // desktop only — el botón ya está oculto por CSS
+  document.getElementById('rm-status').textContent = '';
+  document.getElementById('rm-btn-generar').disabled = false;
+  document.getElementById('resumen-overlay').classList.add('visible');
+}
+
+function cerrarResumenModal() {
+  document.getElementById('resumen-overlay').classList.remove('visible');
+}
+
+async function generarResumenDocx() {
+  const btn    = document.getElementById('rm-btn-generar');
+  const status = document.getElementById('rm-status');
+  const fechaDesde = document.getElementById('rm-fecha-desde').value || '';
+  const fechaHasta = document.getElementById('rm-fecha-hasta').value || '';
+  const filtro     = document.getElementById('rm-filtro').value || '';
+
+  btn.disabled = true;
+  status.textContent = 'Buscando notas…';
+
+  try {
+    const data = await gasPost({
+      action: 'getNotasResumen',
+      email : estado.usuario?.email || '',
+      fechaDesde, fechaHasta, filtro
+    });
+
+    if (!data.ok) {
+      status.textContent = '⚠ ' + (data.error || 'Error al buscar notas.');
+      btn.disabled = false;
+      return;
+    }
+    if (!data.notas || data.notas.length === 0) {
+      status.textContent = 'No se encontraron notas con ese filtro.';
+      btn.disabled = false;
+      return;
+    }
+
+    status.textContent = `Generando DOCX (${data.notas.length} notas)…`;
+    await construirYDescargarDocx(data.notas);
+
+    status.textContent = `✅ Listo — ${data.notas.length} notas`;
+    btn.disabled = false;
+    setTimeout(cerrarResumenModal, 900);
+
+  } catch (err) {
+    status.textContent = '⚠ Error: ' + err.message;
+    btn.disabled = false;
+  }
+}
+
+// ── Construcción del DOCX (mismos criterios validados en el prototipo) ──
+async function construirYDescargarDocx(notas) {
+  const FONT          = 'Calibri';
+  const SIZE_BODY     = 18;   // 9pt
+  const SIZE_HORARIO  = 17;   // 8.5pt
+  const SIZE_PILL     = 15;   // 7.5pt
+  const SIZE_DAY      = 24;   // 12pt
+  const ORANGE        = 'C2410C';
+  const ORANGE_BG     = 'FFEDD5';
+  const DARK_TEXT     = '1E293B';
+
+  const DIAS  = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+  function fechaLarga(fechaStr) {
+    const [y, m, d] = fechaStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return `${DIAS[dt.getDay()]} ${d} de ${MESES[m - 1]} de ${y}`;
+  }
+
+  function inlineToRuns(node, baseOpts) {
+    const runs = [];
+    node.childNodes.forEach(child => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = child.textContent;
+        if (text) runs.push(new docx.TextRun({ text, ...baseOpts }));
+      } else if (child.tagName === 'STRONG' || child.tagName === 'B') {
+        runs.push(new docx.TextRun({ text: child.textContent, bold: true, ...baseOpts }));
+      } else if (child.tagName === 'EM' || child.tagName === 'I') {
+        runs.push(new docx.TextRun({ text: child.textContent, italics: true, ...baseOpts }));
+      } else {
+        const text = child.textContent || '';
+        if (text) runs.push(new docx.TextRun({ text, ...baseOpts }));
+      }
+    });
+    return runs;
+  }
+
+  function pillRun(span) {
+    const style = span.getAttribute('style') || '';
+    const bg = (style.match(/background:\s*#([0-9a-fA-F]{6})/) || [])[1] || 'E2E8F0';
+    const fg = (style.match(/(?<!background-)color:\s*#([0-9a-fA-F]{6})/) || [])[1] || '334155';
+    return new docx.TextRun({
+      text: ` ${span.textContent} `,
+      size: SIZE_PILL, bold: true, color: fg, font: FONT,
+      shading: { type: docx.ShadingType.CLEAR, fill: bg },
+    });
+  }
+
+  function notaToParagraphs(html, etiqueta) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    const paragraphs = [];
+    const pNodes = wrapper.querySelectorAll('p');
+
+    pNodes.forEach(p => {
+      const cls = p.getAttribute('class') || '';
+
+      if (cls.includes('nota-horario')) {
+        paragraphs.push(new docx.Paragraph({
+          spacing: { before: 120, after: 40 },
+          shading: { type: docx.ShadingType.CLEAR, fill: ORANGE_BG },
+          children: [
+            new docx.TextRun({ text: p.textContent, bold: true, color: ORANGE, size: SIZE_HORARIO, font: FONT }),
+            new docx.TextRun({ text: `  [${(etiqueta || '').toUpperCase()}]`, color: DARK_TEXT, size: SIZE_HORARIO, font: FONT }),
+          ],
+        }));
+        return;
+      }
+
+      if (cls.includes('marcas-wrap')) {
+        const spans = p.querySelectorAll('span.marca-pill');
+        if (spans.length === 0) return;
+        paragraphs.push(new docx.Paragraph({
+          spacing: { before: 60, after: 60 },
+          children: Array.from(spans).map(pillRun),
+        }));
+        return;
+      }
+
+      const text = (p.textContent || '').trim();
+      if (text === '') return; // <p></p> vacío: se omite
+
+      paragraphs.push(new docx.Paragraph({
+        spacing: { after: 40 },
+        children: inlineToRuns(p, { size: SIZE_BODY, font: FONT, color: DARK_TEXT }),
+      }));
+    });
+
+    return paragraphs;
+  }
+
+  const children = [];
+  let currentDia = null;
+
+  notas.forEach((nota, i) => {
+    if (nota.fecha !== currentDia) {
+      currentDia = nota.fecha;
+      children.push(new docx.Paragraph({
+        spacing: { before: i === 0 ? 0 : 300, after: 120 },
+        border: { bottom: { color: ORANGE, space: 4, style: docx.BorderStyle.SINGLE, size: 6 } },
+        children: [new docx.TextRun({ text: fechaLarga(nota.fecha).toUpperCase(), bold: true, size: SIZE_DAY, color: ORANGE, font: FONT })],
+      }));
+    } else {
+      children.push(new docx.Paragraph({
+        spacing: { before: 100, after: 0 },
+        border: { top: { color: 'E2E8F0', space: 2, style: docx.BorderStyle.SINGLE, size: 2 } },
+        children: [],
+      }));
+    }
+    children.push(...notaToParagraphs(nota.contenidoHtml, nota.etiqueta));
+  });
+
+  const filename = 'resumen_notas_' + Utilities_formatDateJs(new Date()) + '.docx';
+
+  const doc = new docx.Document({
+    sections: [{
+      properties: { page: { margin: { top: 400, bottom: 400, left: 450, right: 450 } } },
+      footers: {
+        default: new docx.Footer({
+          children: [new docx.Paragraph({
+            alignment: docx.AlignmentType.CENTER,
+            children: [
+              new docx.TextRun({ text: filename, size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ text: '   ·   ', size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ children: [docx.PageNumber.CURRENT], size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ text: ' / ', size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ children: [docx.PageNumber.TOTAL_PAGES], size: 14, color: '94A3B8', font: FONT }),
+            ],
+          })],
+        }),
+      },
+      children,
+    }],
+  });
+
+  const blob = await docx.Packer.toBlob(doc);
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Formato yyyyMMdd_HHmmss sin depender de Utilities (eso es solo GAS server-side)
+function Utilities_formatDateJs(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 </script>
 </body>
