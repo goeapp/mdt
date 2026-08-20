@@ -13,6 +13,16 @@
 <meta name="apple-mobile-web-app-title" content="Mesa">
 <link rel="apple-touch-icon" href="icon-192.png">
 <!--
+  v14.1 — 3 ajustes quirúrgicos sobre v14.0 (sin cambios en el .gs, sigue siendo mesa_v13_0.gs):
+  1. Alarma del Registrador extendida de ~0.85s a 15s (tandas de beeps repetidas cada
+     1.7s), cancelable con detenerAlarma() si el usuario responde antes.
+  2. Auto-continuar el ciclo: si a los 1 min de sonar el aviso "¿Continuar?" nadie
+     respondió, se continúa solo (equivalente a apretar "Continuar"). Se cancela el
+     timeout si hay respuesta manual (Finalizar/Continuar/Cancelar).
+  3. Banner de "Borrador recuperado": la "✕" ahora solo cierra el aviso visualmente,
+     sin tocar el editor ni el draft en localStorage. Se agregó un botón separado
+     "🗑 Descartar" para la limpieza completa (antes era la misma acción).
+
   v14.0 — 3 fixes quirúrgicos (sin cambios en el .gs, sigue siendo mesa_v13_0.gs):
   1. Draft del Anotador en localStorage: autoguardado (texto+etiqueta+marcas+horario)
      debounced, restaura al recargar si hay draft <48hs, banner con opción de descartar.
@@ -606,6 +616,7 @@ a { color: inherit; text-decoration: none; }
   margin         : 0 0 8px 0;
 }
 #draft-banner.visible { display: flex; }
+#draft-banner-btns { display: flex; align-items: center; gap: 6px; }
 #draft-banner-descartar {
   background   : none;
   border       : 1px solid #fdba74;
@@ -618,6 +629,19 @@ a { color: inherit; text-decoration: none; }
   white-space  : nowrap;
 }
 #draft-banner-descartar:hover { background: #fdba74; color: #7c2d12; }
+/* v14.1: cerrar el aviso sin descartar el borrador (separado de "Descartar") */
+#draft-banner-cerrar {
+  background   : none;
+  border       : none;
+  color        : #9a3412;
+  padding      : 2px 4px;
+  font-size    : .78rem;
+  font-weight  : 700;
+  line-height  : 1;
+  cursor       : pointer;
+  opacity      : .6;
+}
+#draft-banner-cerrar:hover { opacity: 1; }
 
 /* ── Editor Quill ──────────────────────────────── */
 #editor-wrap {
@@ -1955,7 +1979,7 @@ a { color: inherit; text-decoration: none; }
   <div class="login-box">
     <span class="login-emoji" id="login-emoji">🗂️</span>
     <div class="login-logo" id="login-logo">MESA DE TRABAJO</div>
-    <div class="login-sub">v14.0 · Workspace personal</div>
+    <div class="login-sub">v14.1 · Workspace personal</div>
     <div class="login-title">Accedé con tu cuenta Google</div>
     <div class="login-desc">
       Solo cuentas autorizadas por el administrador<br>
@@ -1988,7 +2012,7 @@ a { color: inherit; text-decoration: none; }
     <!-- hdr-logo y hdr-name se ocultan en mobile por CSS (mejora C) -->
     <span class="hdr-logo" id="hdr-logo">MESA DE TRABAJO</span>
     <span class="hdr-name" id="hdr-nombre"></span>
-    <span class="hdr-version">v14.0</span>
+    <span class="hdr-version">v14.1</span>
     <span class="hdr-sep"></span>
     <span class="hdr-refran" id="hdr-refran"></span>
     <button class="btn-instalar-pwa" id="btn-instalar-pwa" title="Instalar app" style="display:none" onclick="instalarPWA()">
@@ -2076,7 +2100,10 @@ a { color: inherit; text-decoration: none; }
       <!-- BORRADOR LOCAL — v14.0 -->
       <div id="draft-banner">
         <span id="draft-banner-txt">📝 Borrador recuperado</span>
-        <button id="draft-banner-descartar" onclick="descartarDraft()" title="Descartar borrador y vaciar el anotador">✕ Descartar</button>
+        <div id="draft-banner-btns">
+          <button id="draft-banner-descartar" onclick="descartarDraft()" title="Descartar borrador y vaciar el anotador">🗑 Descartar</button>
+          <button id="draft-banner-cerrar" onclick="cerrarBannerDraft()" title="Cerrar aviso (el borrador se mantiene)">✕</button>
+        </div>
       </div>
 
       <div id="editor-wrap">
@@ -2313,7 +2340,7 @@ a { color: inherit; text-decoration: none; }
 ────────────────────────────────────────────── */
 const GAS_URL    = 'https://script.google.com/macros/s/AKfycbzhcy1THlO2qwvx8clyaHRN2xAG8hX6rTsXelELjGBA83gm_358f68BHjLJbbX_tTjB/exec';
 const CLIENT_ID  = '174536806740-aus6npjphhdcn5nkgtt1ejl0tcj16ou7.apps.googleusercontent.com';
-const VERSION_UI = 'v14.0';
+const VERSION_UI = 'v14.1';
 
 /* ──────────────────────────────────────────────
    COLORES POSTITS
@@ -2379,6 +2406,8 @@ const estado = {
     timerId     : null,       // setInterval del cronómetro
     tareas      : [],         // lista completa de tareas del Sheet
     audioCtx    : null,       // v12.5: AudioContext persistente (evita bloqueo)
+    alarmaTimeouts: [],       // v14.1: timeoutId de las tandas de beeps de la alarma extendida
+    autoContinuarId: null,    // v14.1: timeoutId del auto-continuar a 1 min sin respuesta
   }
 };
 
@@ -2488,6 +2517,15 @@ function restaurarDraftLocal() {
     banner.classList.add('visible');
   }
   mostrarToast('📝 Se recuperó un borrador que no habías guardado');
+}
+
+function cerrarBannerDraft() {
+  // v14.1: cierra únicamente el banner visual — el borrador sigue en localStorage
+  // y el texto restaurado en el editor no se toca. Se diferencia de descartarDraft(),
+  // que vacía todo. El draft se seguirá actualizando con el autoguardado normal y
+  // se borrará solo como siempre: al guardar la nota o al finalizar una tarea.
+  const banner = document.getElementById('draft-banner');
+  if (banner) banner.classList.remove('visible');
 }
 
 function descartarDraft() {
@@ -2857,12 +2895,18 @@ function actualizarCronometro() {
   if (fill) fill.style.width = pct + '%';
 }
 
+const ALARMA_DURACION_SEG = 15;  // v14.1: la alarma anterior duraba ~0.85s, muy corta
+
 function reproducirAlarma() {
   // v12.5: reutilizar el AudioContext creado en iniciarTarea (evita bloqueo por falta de interacción)
+  // v14.1: se extiende a ALARMA_DURACION_SEG repitiendo la tanda de beeps, en vez de un
+  // único disparo de ~0.85s. Se guardan los timeoutId programados para poder cortarla
+  // en seco con detenerAlarma() si el usuario responde antes de que termine.
   try {
     const ctx = estado.reg.audioCtx;
     if (!ctx) return;
     if (ctx.state === 'suspended') ctx.resume();
+    detenerAlarma();  // por las dudas, no superponer con una tanda anterior
     const beep = (freq, start, dur) => {
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -2875,13 +2919,29 @@ function reproducirAlarma() {
       osc.start(ctx.currentTime + start);
       osc.stop(ctx.currentTime + start + dur + 0.05);
     };
-    beep(880, 0,    0.18);
-    beep(880, 0.22, 0.18);
-    beep(1100, 0.5, 0.35);
+    const tanda = (offset) => {
+      beep(880, offset,       0.18);
+      beep(880, offset + 0.22, 0.18);
+      beep(1100, offset + 0.5, 0.35);
+    };
+    // Tandas cada 1.7s cubriendo los ALARMA_DURACION_SEG segundos
+    for (let t = 0; t < ALARMA_DURACION_SEG; t += 1.7) {
+      const id = setTimeout(() => tanda(0), t * 1000);
+      estado.reg.alarmaTimeouts.push(id);
+    }
   } catch(e) {
     // AudioContext no disponible, sin alarma sonora
   }
 }
+
+function detenerAlarma() {
+  // v14.1: cancela las tandas de beeps pendientes (usado al iniciar una nueva alarma
+  // y al responder el aviso de ciclo completado antes de que termine sola)
+  estado.reg.alarmaTimeouts.forEach(id => clearTimeout(id));
+  estado.reg.alarmaTimeouts = [];
+}
+
+const AUTO_CONTINUAR_MS = 60 * 1000;  // v14.1: 1 min fijo sin respuesta → continúa solo
 
 function mostrarNotifCiclo() {
   // v12.5: si el panel está cerrado, abrirlo para que el usuario vea la notif y escuche la alarma
@@ -2896,12 +2956,26 @@ function mostrarNotifCiclo() {
   // Estado visual esperando decisión
   document.getElementById('reg-tiempo')?.classList.add('esperando');
   document.getElementById('reg-progress-fill')?.classList.add('esperando');
+
+  // v14.1: si en 1 min nadie respondió (ni Finalizar ni Continuar), continuar solo
+  // — equivalente a apretar "Continuar". Se cancela en ocultarNotifCiclo() si el
+  // usuario responde antes.
+  estado.reg.autoContinuarId = setTimeout(() => {
+    estado.reg.autoContinuarId = null;
+    mostrarToast('🍅 Sin respuesta — se continuó automáticamente');
+    continuarTarea();
+  }, AUTO_CONTINUAR_MS);
 }
 
 function ocultarNotifCiclo() {
   document.getElementById('reg-notif')?.classList.remove('visible');
   document.getElementById('reg-tiempo')?.classList.remove('esperando');
   document.getElementById('reg-progress-fill')?.classList.remove('esperando');
+  detenerAlarma();  // v14.1: cortar la alarma si el usuario responde antes de los 15s
+  if (estado.reg.autoContinuarId) {
+    clearTimeout(estado.reg.autoContinuarId);  // v14.1: cancelar auto-continuar si hubo respuesta manual
+    estado.reg.autoContinuarId = null;
+  }
 }
 
 function continuarTarea() {
