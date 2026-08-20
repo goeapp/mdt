@@ -13,6 +13,17 @@
 <meta name="apple-mobile-web-app-title" content="Mesa">
 <link rel="apple-touch-icon" href="icon-192.png">
 <!--
+  v14.0 — 3 fixes quirúrgicos (sin cambios en el .gs, sigue siendo mesa_v13_0.gs):
+  1. Draft del Anotador en localStorage: autoguardado (texto+etiqueta+marcas+horario)
+     debounced, restaura al recargar si hay draft <48hs, banner con opción de descartar.
+  2. renderEtiquetas()/renderMarcas() ya no resetean la selección vigente al reconstruir
+     los chips (bug: Actualizar —auto cada 15min o manual— pisaba ETIQUETA/MARCAS).
+  3. Registrador (Pomodoro): el ciclo ahora se mide comparando contra Date.now() en vez
+     de contar ticks de setInterval (el navegador throttlea el interval en 2do plano,
+     por eso el ciclo nunca llegaba a 25min real y la alarma nunca sonaba). Se suma un
+     listener de visibilitychange que recalcula al volver a la pestaña y hace resume()
+     del AudioContext.
+
   v13.0 — Resumen DOCX de Notas (solo desktop):
   1. Botón nuevo en header global (oculto en mobile, breakpoint 720px)
   2. Modal: Fecha desde/hasta (vacío = todo) + filtro de texto (AND de palabras)
@@ -578,6 +589,35 @@ a { color: inherit; text-decoration: none; }
   white-space: nowrap;
   margin-top : 18px;
 }
+
+/* ── Borrador local — v14.0 ───────────────────── */
+#draft-banner {
+  display        : none;
+  align-items    : center;
+  justify-content: space-between;
+  gap            : 8px;
+  background     : #fff7ed;
+  border         : 1px solid #fdba74;
+  color          : #9a3412;
+  border-radius  : var(--radius-sm);
+  padding        : 6px 10px;
+  font-size      : .72rem;
+  font-weight    : 600;
+  margin         : 0 0 8px 0;
+}
+#draft-banner.visible { display: flex; }
+#draft-banner-descartar {
+  background   : none;
+  border       : 1px solid #fdba74;
+  color        : #9a3412;
+  border-radius: var(--radius-sm);
+  padding      : 2px 8px;
+  font-size    : .68rem;
+  font-weight  : 600;
+  cursor       : pointer;
+  white-space  : nowrap;
+}
+#draft-banner-descartar:hover { background: #fdba74; color: #7c2d12; }
 
 /* ── Editor Quill ──────────────────────────────── */
 #editor-wrap {
@@ -1915,7 +1955,7 @@ a { color: inherit; text-decoration: none; }
   <div class="login-box">
     <span class="login-emoji" id="login-emoji">🗂️</span>
     <div class="login-logo" id="login-logo">MESA DE TRABAJO</div>
-    <div class="login-sub">v13.0 · Workspace personal</div>
+    <div class="login-sub">v14.0 · Workspace personal</div>
     <div class="login-title">Accedé con tu cuenta Google</div>
     <div class="login-desc">
       Solo cuentas autorizadas por el administrador<br>
@@ -1948,7 +1988,7 @@ a { color: inherit; text-decoration: none; }
     <!-- hdr-logo y hdr-name se ocultan en mobile por CSS (mejora C) -->
     <span class="hdr-logo" id="hdr-logo">MESA DE TRABAJO</span>
     <span class="hdr-name" id="hdr-nombre"></span>
-    <span class="hdr-version">v13.0</span>
+    <span class="hdr-version">v14.0</span>
     <span class="hdr-sep"></span>
     <span class="hdr-refran" id="hdr-refran"></span>
     <button class="btn-instalar-pwa" id="btn-instalar-pwa" title="Instalar app" style="display:none" onclick="instalarPWA()">
@@ -2031,6 +2071,12 @@ a { color: inherit; text-decoration: none; }
           <!-- Preview -->
           <div class="horario-preview" id="horario-preview">09:00 a 10:00 (60 min)</div>
         </div>
+      </div>
+
+      <!-- BORRADOR LOCAL — v14.0 -->
+      <div id="draft-banner">
+        <span id="draft-banner-txt">📝 Borrador recuperado</span>
+        <button id="draft-banner-descartar" onclick="descartarDraft()" title="Descartar borrador y vaciar el anotador">✕ Descartar</button>
       </div>
 
       <div id="editor-wrap">
@@ -2267,7 +2313,7 @@ a { color: inherit; text-decoration: none; }
 ────────────────────────────────────────────── */
 const GAS_URL    = 'https://script.google.com/macros/s/AKfycbzhcy1THlO2qwvx8clyaHRN2xAG8hX6rTsXelELjGBA83gm_358f68BHjLJbbX_tTjB/exec';
 const CLIENT_ID  = '174536806740-aus6npjphhdcn5nkgtt1ejl0tcj16ou7.apps.googleusercontent.com';
-const VERSION_UI = 'v13.0';
+const VERSION_UI = 'v14.0';
 
 /* ──────────────────────────────────────────────
    COLORES POSTITS
@@ -2326,14 +2372,136 @@ const estado = {
     activo      : false,
     etiqueta    : '',
     tarea       : '',
-    horaInicio  : null,       // Date del momento de inicio
-    segSegundos : 0,          // segundos transcurridos en el ciclo actual
+    horaInicio  : null,       // Date del momento de inicio (tarea completa)
+    cicloInicioMs : 0,        // v14.0: timestamp (Date.now()) de inicio del ciclo actual
+    segSegundos : 0,          // segundos transcurridos en el ciclo actual (derivado, solo display)
     cicloNum    : 1,          // número de ciclo 25-min actual
     timerId     : null,       // setInterval del cronómetro
     tareas      : [],         // lista completa de tareas del Sheet
     audioCtx    : null,       // v12.5: AudioContext persistente (evita bloqueo)
   }
 };
+
+/* ──────────────────────────────────────────────
+   BORRADOR LOCAL DEL ANOTADOR — v14.0
+   Autoguarda en localStorage lo que estás escribiendo (texto+etiqueta+
+   marcas+horario) para no perderlo si se cierra el navegador sin guardar
+   la nota. Se restaura al recargar si tiene menos de DRAFT_MAX_AGE_MS.
+────────────────────────────────────────────── */
+const DRAFT_KEY          = 'mdt_draft_v1';
+const DRAFT_MAX_AGE_MS   = 48 * 60 * 60 * 1000;  // 48hs
+let   draftDebounceId    = null;
+let   draftYaRestaurado  = false;  // solo intentamos restaurar una vez por sesión
+
+function guardarDraftLocal() {
+  if (!estado.quill) return;
+  try {
+    const textoPlano = estado.quill.getText().trim();
+    // Sin texto y sin marcas/horario tocado: no vale la pena guardar un draft vacío
+    if (!textoPlano && estado.marcasActivas.length === 0 && !estado.horarioActivo) {
+      limpiarDraftLocal();
+      return;
+    }
+    const draft = {
+      html         : estado.quill.getSemanticHTML(),
+      etiqueta     : estado.etiqActiva || null,
+      marcas       : estado.marcasActivas,
+      horarioActivo: estado.horarioActivo,
+      horaIdx      : estado.horaIdx,
+      duracionIdx  : estado.duracionIdx,
+      ts           : Date.now(),
+    };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch(e) {
+    console.warn('No se pudo guardar el borrador local:', e);
+  }
+}
+
+function programarGuardadoDraft() {
+  clearTimeout(draftDebounceId);
+  draftDebounceId = setTimeout(guardarDraftLocal, 800);
+}
+
+function limpiarDraftLocal() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+  const banner = document.getElementById('draft-banner');
+  if (banner) banner.classList.remove('visible');
+}
+
+function restaurarDraftLocal() {
+  if (draftYaRestaurado) return;
+  draftYaRestaurado = true;
+  let draft;
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return;
+    draft = JSON.parse(raw);
+  } catch(e) { return; }
+  if (!draft || !draft.ts || (Date.now() - draft.ts) > DRAFT_MAX_AGE_MS) {
+    limpiarDraftLocal();
+    return;
+  }
+  if (!estado.quill) return;
+
+  // Contenido de la nota
+  if (draft.html) {
+    estado.quill.clipboard.dangerouslyPasteHTML(draft.html);
+  }
+
+  // Etiqueta
+  if (draft.etiqueta) {
+    const chip = Array.from(document.querySelectorAll('.etiq-chip'))
+      .find(c => c.textContent === draft.etiqueta);
+    if (chip) seleccionarEtiqueta(draft.etiqueta, chip);
+  }
+
+  // Marcas
+  if (Array.isArray(draft.marcas) && draft.marcas.length) {
+    estado.marcasActivas = draft.marcas;
+    document.querySelectorAll('.marca-chip').forEach(chip => {
+      if (draft.marcas.some(m => m.nombre === chip.dataset.nombre)) {
+        chip.classList.add('active');
+      }
+    });
+    actualizarBtnLimpiarMarcas();
+  }
+
+  // Horario
+  if (draft.horarioActivo) {
+    estado.horarioActivo = true;
+    estado.horaIdx     = draft.horaIdx     ?? estado.horaIdx;
+    estado.duracionIdx  = draft.duracionIdx ?? estado.duracionIdx;
+    const toggleEl = document.getElementById('toggle-horario');
+    if (toggleEl) toggleEl.checked = true;
+    actualizarPickerDisplay();
+    document.getElementById('horario-selectores')?.classList.add('visible');
+  }
+
+  // Aviso
+  const banner = document.getElementById('draft-banner');
+  const txt    = document.getElementById('draft-banner-txt');
+  if (banner && txt) {
+    const fecha = new Date(draft.ts);
+    const hh = String(fecha.getHours()).padStart(2,'0');
+    const mm = String(fecha.getMinutes()).padStart(2,'0');
+    txt.textContent = `📝 Borrador recuperado de las ${hh}:${mm}`;
+    banner.classList.add('visible');
+  }
+  mostrarToast('📝 Se recuperó un borrador que no habías guardado');
+}
+
+function descartarDraft() {
+  if (estado.quill) estado.quill.setContents([]);
+  limpiarMarcasSeleccionadas();
+  if (estado.horarioActivo) {
+    estado.horarioActivo = false;
+    const toggleEl = document.getElementById('toggle-horario');
+    if (toggleEl) toggleEl.checked = false;
+    document.getElementById('horario-selectores')?.classList.remove('visible');
+  }
+  limpiarDraftLocal();
+  mostrarToast('🗑 Borrador descartado');
+}
 
 /* ──────────────────────────────────────────────
    HORARIOS — generar array de segmentos de 30 min
@@ -2379,11 +2547,13 @@ function actualizarPickerDisplay() {
 function cambiarHora(dir) {
   estado.horaIdx = (estado.horaIdx + dir + HORA_SLOTS.length) % HORA_SLOTS.length;
   actualizarPickerDisplay();
+  programarGuardadoDraft();  // v14.0
 }
 
 function cambiarDuracion(dir) {
   estado.duracionIdx = Math.max(0, Math.min(DURACION_OPTS.length - 1, estado.duracionIdx + dir));
   actualizarPickerDisplay();
+  programarGuardadoDraft();  // v14.0
 }
 
 function onToggleHorario() {
@@ -2399,6 +2569,7 @@ function onToggleHorario() {
   } else {
     selectores.classList.remove('visible');
   }
+  programarGuardadoDraft();  // v14.0
 }
 
 /* ──────────────────────────────────────────────
@@ -2441,6 +2612,12 @@ function renderMarcas(marcas) {
     chip.style.color      = c.fg;
     chip.style.borderColor = c.border;
     chip.onclick = () => toggleMarca(m, chip);
+    // v14.0 fix: reaplicar 'active' si esta marca ya estaba seleccionada
+    // (antes, Actualizar reconstruía los chips y perdían la clase visualmente,
+    // aunque estado.marcasActivas seguía correcto por debajo — confuso igual)
+    if (estado.marcasActivas.some(ma => ma.nombre === m.nombre)) {
+      chip.classList.add('active');
+    }
     lista.appendChild(chip);
   });
 }
@@ -2455,6 +2632,7 @@ function toggleMarca(marca, chip) {
     chip.classList.remove('active');
   }
   actualizarBtnLimpiarMarcas();
+  programarGuardadoDraft();  // v14.0
 }
 
 function actualizarBtnLimpiarMarcas() {
@@ -2473,6 +2651,21 @@ function limpiarMarcasSeleccionadas() {
 ────────────────────────────────────────────── */
 
 let REG_CICLO_SEG = 25 * 60;  // v12.5: let (modificable desde panel Métricas)
+
+// v14.0: al volver a la pestaña (visibilitychange), recalcular el ciclo de inmediato.
+// Antes, si dejabas la pestaña oculta/minimizada, el setInterval throttleado del
+// navegador podía tardar mucho en volver a disparar — con esto no esperás al próximo
+// tick salteado para enterarte de que el ciclo ya venció. También reintenta resume()
+// del AudioContext, que algunos navegadores suspenden tras inactividad prolongada.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (estado.reg.activo && estado.reg.timerId) {
+    tickRegistrador();
+  }
+  if (estado.reg.audioCtx && estado.reg.audioCtx.state === 'suspended') {
+    estado.reg.audioCtx.resume().catch(() => {});
+  }
+});
 
 function toggleRegistrador() {
   const panel = document.getElementById('panel-registrador');
@@ -2600,6 +2793,7 @@ function iniciarTarea() {
   estado.reg.etiqueta   = etiqueta;
   estado.reg.tarea      = tarea.tarea;
   estado.reg.horaInicio = new Date();
+  estado.reg.cicloInicioMs = Date.now();  // v14.0: base real del ciclo
   estado.reg.segSegundos = 0;
   estado.reg.cicloNum   = 1;
 
@@ -2629,14 +2823,21 @@ function iniciarTarea() {
 }
 
 function tickRegistrador() {
-  estado.reg.segSegundos++;
+  // v14.0 fix: el elapsed se calcula contra el reloj real (Date.now() - cicloInicioMs),
+  // no contando cuántas veces disparó el setInterval. Los navegadores throttlean el
+  // interval agresivamente con la pestaña en 2do plano/minimizada, así que contar ticks
+  // hacía que el ciclo tardara mucho más de 25 min reales (o nunca llegara) y la alarma
+  // nunca sonara.
+  const elapsedSeg = Math.floor((Date.now() - estado.reg.cicloInicioMs) / 1000);
+  estado.reg.segSegundos = Math.min(elapsedSeg, REG_CICLO_SEG);
 
   // Ciclo de 25 min completado
-  if (estado.reg.segSegundos >= REG_CICLO_SEG) {
+  if (elapsedSeg >= REG_CICLO_SEG && estado.reg.timerId) {
     reproducirAlarma();
     mostrarNotifCiclo();
     // No reiniciar automáticamente — esperar acción del usuario
     clearInterval(estado.reg.timerId);
+    estado.reg.timerId = null;
   }
 
   actualizarCronometro();
@@ -2706,6 +2907,7 @@ function ocultarNotifCiclo() {
 function continuarTarea() {
   ocultarNotifCiclo();
   estado.reg.cicloNum++;
+  estado.reg.cicloInicioMs = Date.now();  // v14.0: nueva base real para el ciclo que arranca
   estado.reg.segSegundos = 0;
   document.getElementById('reg-ciclo-num').textContent = estado.reg.cicloNum;
   actualizarCronometro();
@@ -2769,6 +2971,10 @@ function finalizarTarea() {
     actualizarPickerDisplay();
     document.getElementById('horario-selectores').classList.add('visible');
   }
+
+  // v14.0: el contenido del anotador se reemplaza por el de la tarea finalizada;
+  // cualquier borrador local anterior queda obsoleto
+  limpiarDraftLocal();
 
   // Escribir tarea en Quill + registro Pomodoro en itálica (v12.5)
   if (estado.quill) {
@@ -3252,6 +3458,11 @@ function iniciarQuill() {
   });
   const container = document.querySelector('#quill-host .ql-container');
   if (container) { container.style.flex = '1'; container.style.overflow = 'auto'; }
+
+  // v14.0: autoguardar borrador local ante cualquier cambio de texto (debounced)
+  estado.quill.on('text-change', (delta, oldDelta, source) => {
+    if (source === 'user') programarGuardadoDraft();
+  });
 }
 
 /* ──────────────────────────────────────────────
@@ -3369,19 +3580,34 @@ function renderizarDatos(data) {
   }
 
   renderToolbar(data.herramientas || []);
+
+  // v14.0: intentar restaurar el borrador local, una sola vez por sesión,
+  // recién acá porque necesita que los chips de etiqueta/marca ya existan en el DOM
+  restaurarDraftLocal();
 }
 
 function renderEtiquetas(etiquetas) {
   const lista = document.getElementById('etiquetas-list');
+  // v14.0 fix: preservar la etiqueta activa vigente al reconstruir los chips
+  // (antes, Actualizar —auto cada 15min o manual— siempre reseteaba a la primera)
+  const previaActiva = estado.etiqActiva;
   lista.innerHTML = '';
+  let chipARestaurar = null;
   etiquetas.forEach(e => {
     const chip     = document.createElement('button');
     chip.className = 'etiq-chip';
     chip.textContent = e;
     chip.onclick   = () => seleccionarEtiqueta(e, chip);
     lista.appendChild(chip);
+    if (e === previaActiva) chipARestaurar = chip;
   });
-  if (etiquetas.length > 0) seleccionarEtiqueta(etiquetas[0], lista.firstChild);
+  if (chipARestaurar) {
+    // ya había una selección vigente y sigue existiendo en la lista nueva: mantenerla
+    seleccionarEtiqueta(previaActiva, chipARestaurar);
+  } else if (etiquetas.length > 0) {
+    // primera carga, o la etiqueta previa ya no existe en el Sheet: default a la primera
+    seleccionarEtiqueta(etiquetas[0], lista.firstChild);
+  }
 }
 
 function seleccionarEtiqueta(nombre, chip) {
@@ -3389,6 +3615,7 @@ function seleccionarEtiqueta(nombre, chip) {
   chip.classList.add('active');
   estado.etiqActiva = nombre;
   document.getElementById('etiq-seleccionada').textContent = nombre;
+  programarGuardadoDraft();  // v14.0
 }
 
 function renderNotasHoy(notas) {
@@ -3549,6 +3776,9 @@ async function guardarNota() {
 
       // v12: limpiar marcas seleccionadas
       limpiarMarcasSeleccionadas();
+
+      // v14.0: la nota se guardó con éxito, el borrador local ya no aplica
+      limpiarDraftLocal();
 
       estado.fechaVista = null;
       actualizarFechaPanel();
