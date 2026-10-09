@@ -1,0 +1,4824 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mesa de Trabajo</title>
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mesa">
+<link rel="apple-touch-icon" href="icon-192.png">
+<!--
+  v15.0 — Migración a Supabase (proyecto PWAgoe). GAS deja de ser el backend de datos.
+  1. Datos: tablas mdt_ en Supabase, consultadas directo con supabase-js (RLS por mail).
+     Se va el GAS mesa_v13_0.gs como backend (queda intacto como respaldo).
+  2. Login: pwa_pin nuevo = Supabase Auth con código por mail (patrón prekom_auth_test
+     v0.1.0). Sesión guardada propia de MdT (storageKey mdt-sb-auth) y cierre de sesión
+     LOCAL (solo este dispositivo). Habilitados: tabla mdt_usuarios.
+  3. Editar notas (modo edición en el Anotador): ✏️ en la tarjeta del panel HOY. Encabezado
+     "Editando nota de las HH:MM", "Guardar cambios" + "Cancelar edición". Los ✏️ quedan
+     desactivados mientras el Anotador tenga texto sin guardar.
+  4. Borrar notas = papelera (🗑 en la tarjeta). Vista Papelera con "Restaurar".
+  5. Notas importadas del Sheet (anteriores a la migración): bloqueadas (🔒), sin ✏️ ni 🗑.
+  6. Toggle "📅 Otra fecha" en el Anotador (no permite fechas futuras). Siempre vuelve a
+     apagado después de guardar. En modo edición arranca encendido con la fecha de la nota.
+  7. PostIts: el orden por arrastre se guarda (columna orden). En mobile no se arrastra
+     y la ✕ de borrar queda siempre visible.
+  8. Calendar: lo sincroniza mdt_sync_gas_v1_0.gs (23 h diario) + botón 📅 Sincronizar.
+  9. Se quitan: Google Doc, panel de Métricas (Shift+Ctrl+D), keep-alive, slider del ciclo
+     Pomodoro (queda fijo en 25 min) y el login con botón de Google.
+ 10. Refrán del día calculado en el frontend (misma lista y lógica que el GAS v13).
+-->
+<!--
+  v14.1 —3 ajustes quirúrgicos sobre v14.0 (sin cambios en el .gs, sigue siendo mesa_v13_0.gs):
+  1. Alarma del Registrador extendida de ~0.85s a 15s (tandas de beeps repetidas cada
+     1.7s), cancelable con detenerAlarma() si el usuario responde antes.
+  2. Auto-continuar el ciclo: si a los 1 min de sonar el aviso "¿Continuar?" nadie
+     respondió, se continúa solo (equivalente a apretar "Continuar"). Se cancela el
+     timeout si hay respuesta manual (Finalizar/Continuar/Cancelar).
+  3. Banner de "Borrador recuperado": la "✕" ahora solo cierra el aviso visualmente,
+     sin tocar el editor ni el draft en localStorage. Se agregó un botón separado
+     "🗑 Descartar" para la limpieza completa (antes era la misma acción).
+
+  v14.0 — 3 fixes quirúrgicos (sin cambios en el .gs, sigue siendo mesa_v13_0.gs):
+  1. Draft del Anotador en localStorage: autoguardado (texto+etiqueta+marcas+horario)
+     debounced, restaura al recargar si hay draft <48hs, banner con opción de descartar.
+  2. renderEtiquetas()/renderMarcas() ya no resetean la selección vigente al reconstruir
+     los chips (bug: Actualizar —auto cada 15min o manual— pisaba ETIQUETA/MARCAS).
+  3. Registrador (Pomodoro): el ciclo ahora se mide comparando contra Date.now() en vez
+     de contar ticks de setInterval (el navegador throttlea el interval en 2do plano,
+     por eso el ciclo nunca llegaba a 25min real y la alarma nunca sonaba). Se suma un
+     listener de visibilitychange que recalcula al volver a la pestaña y hace resume()
+     del AudioContext.
+
+  v13.0 — Resumen DOCX de Notas (solo desktop):
+  1. Botón nuevo en header global (oculto en mobile, breakpoint 720px)
+  2. Modal: Fecha desde/hasta (vacío = todo) + filtro de texto (AND de palabras)
+  3. Parser HTML→DOCX client-side: nota-horario como badge + [ETIQUETA],
+     <strong>/<em> respetados, marca-pill como badges de color, agrupado por día
+  4. docx@7.1.0 vía unpkg — mismo criterio que MDtoDOCX (footer con nombre + pág. n/nn)
+  GAS: mesa_v13_0.gs (nueva acción getNotasResumen)
+-->
+<!--
+  v12.5 — Cambios respecto a v12.4:
+  1. Selectores INICIO y DURACIÓN en pasos de 15 min (INICIO: 00:00→23:45, DURACIÓN: 0:15→4:00)
+  2. Al finalizar ciclo Pomodoro, se inserta en Quill en itálica: [HH:MM → HH:MM, N min]
+  3. Fix bug temporizador: AudioContext persistente (creado en interacción) + panel se abre automáticamente al terminar ciclo
+  4. Slider de duración del ciclo (2→25 min) en panel Métricas — solo pruebas, sin persistencia
+  5. Shortcut panel Métricas: Shift+D → Shift+Ctrl+D
+  GAS: mesa_v10.gs (sin cambios)
+-->
+<!--
+  v12.0 — Cambios respecto a v11.3:
+  a. Registrador de tareas (desktop only):
+     → Botón 🍅 en header del Anotador → panel flotante
+     → Selección de etiqueta + tarea (desde hoja Tareas del Sheet)
+     → Cronómetro con barra de progreso 25 min
+     → Alarma sonora + notificación visual cada 25 min
+     → Al finalizar: pre-carga anotador con etiqueta, tarea y toggle horario
+  b. Semáforo de sincronización:
+     → Flag estado.guardando previene doble submit en 4G/latencia alta
+     → Aplica a crearPostit, confirmarBottomSheet, guardarEdicionPostit, guardarNota
+  c. Marcas con color:
+     → Selector multi-chip siempre visible debajo del editor Quill
+     → Pills de color cargadas desde hoja Marcas del Sheet
+     → Se serializan en HTML de la nota y en columna Texto para búsqueda
+  GAS: mesa_v10.gs
+-->
+<!--
+  v11.2 — Cambios respecto a v11.1:
+  a. Color .nota-horario cambiado a violeta (era naranja, se confundía con etiqueta)
+  b. Panel de métricas GAS (Shift+D): historial de llamadas, tiempos, indicador semáforo
+  c. Keep-alive liviano: ping a GAS cada 4 min para evitar cold start
+-->
+<!--
+  v11.1 — Cambios respecto a v11:
+  a. Versión visible en mobile: badge compacto junto al ícono en header
+  b. Línea de horario en panel HOY: el GAS inserta <p class="nota-horario">
+     en el HTML del contenido; el frontend la estiliza con acento naranja
+  c. GAS: mesa_v9.1.gs — guardarNota inyecta párrafo horario en contenido HTML
+-->
+<!--
+  v11 — Cambios respecto a v10.1:
+  A. Toggle horario en Anotador
+     → Selectores ▲▼ estilo alarma para hora inicio (30 min) y duración (8 opciones)
+     → Post-guardado: toggle se apaga. Sheet/Doc: línea "13:00 a 14:15 (75 min)"
+     → Calendario: evento con hora exacta (requiere GAS v9)
+  B. FAB + Bottom Sheet en PostIts (mobile)
+     → Botón flotante naranja fijo bottom:80px right:20px
+     → Formulario aparece en bottom sheet deslizable desde abajo
+     → Formulario fijo arriba de grilla eliminado en mobile
+  C. Header mobile: solo ícono, sin texto
+  D. Badge en tab HOY: contador de notas del día
+  E. sw.js: cache actualizado a mdt-v11
+-->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+<!-- v13.0: Resumen DOCX de Notas — generación 100% client-side -->
+<script src="https://unpkg.com/docx@7.1.0/build/index.js"></script>
+<!-- v15.0: Supabase (misma versión probada en prekom_auth_test_v0_1_0) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<style>
+/* ─────────────────────────────────────────────────
+   DESIGN TOKENS
+───────────────────────────────────────────────── */
+:root {
+  --bg       : #f1f5f9;
+  --surface  : #ffffff;
+  --border   : #e2e8f0;
+  --accent   : #d97706;
+  --accent2  : #0f172a;
+  --tag-bg   : #fef3c7;
+  --tag-fg   : #92400e;
+  --tag-sel  : #d97706;
+  --tag-sfg  : #ffffff;
+  --text     : #1e293b;
+  --muted    : #64748b;
+  --success  : #16a34a;
+  --radius   : 12px;
+  --radius-sm: 8px;
+  --shadow   : 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.10);
+  --toolbar-h: 76px;
+  --header-h : 52px;
+  --postit-w : 180px;
+  --postit-min: 110px;
+  --postit-max: 320px;
+  --panel-right-bg: #f1f5f9;
+}
+
+/* ─────────────────────────────────────────────────
+   RESET / BASE
+───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background : var(--bg);
+  color      : var(--text);
+  font-family: 'DM Sans', sans-serif;
+  display    : flex;
+  flex-direction: column;
+  font-size  : 14px;
+  line-height: 1.5;
+}
+button { font-family: inherit; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+
+/* ─────────────────────────────────────────────────
+   LOGIN SCREEN
+───────────────────────────────────────────────── */
+#login-screen {
+  display        : flex;
+  flex-direction : column;
+  align-items    : center;
+  justify-content: center;
+  height         : 100vh;
+  gap            : 24px;
+}
+.login-box {
+  background   : var(--surface);
+  border       : 1px solid var(--border);
+  border-radius: var(--radius);
+  padding      : 48px 40px;
+  max-width    : 360px;
+  width        : 100%;
+  text-align   : center;
+  box-shadow   : var(--shadow-md);
+}
+.login-logo  { font-family: 'Bebas Neue', sans-serif; font-size: 2rem; color: var(--accent); letter-spacing: 3px; margin-bottom: 4px; }
+.login-emoji { font-size: 2.4rem; margin-bottom: 12px; display: block; }
+.login-sub   { font-size: .78rem; color: var(--muted); margin-bottom: 32px; }
+.login-title { font-size: 1rem; font-weight: 600; margin-bottom: 6px; }
+.login-desc  { font-size: .78rem; color: var(--muted); margin-bottom: 24px; line-height: 1.6; }
+/* v15.0: login por código (Supabase Auth) */
+.login-paso   { text-align: left; }
+.login-paso label { display: block; font-size: .72rem; font-weight: 600; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .05em; }
+.login-input  {
+  width: 100%; font-family: inherit; font-size: 16px; padding: 10px 12px;
+  border: 1.5px solid var(--border); border-radius: var(--radius-sm); background: #f8fafc; color: var(--text);
+  outline: none; transition: border-color .15s;
+}
+.login-input:focus { border-color: var(--accent); background: #fff; }
+.login-input.codigo { letter-spacing: 6px; font-size: 22px; text-align: center; }
+.login-btn {
+  width: 100%; margin-top: 12px; padding: 10px 16px; border: none; border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff; font-size: .85rem; font-weight: 600;
+}
+.login-btn:disabled { opacity: .55; cursor: wait; }
+.login-btn.sec { background: transparent; color: var(--muted); border: 1px solid var(--border); font-weight: 500; margin-top: 8px; }
+.login-msg { font-size: .76rem; margin-top: 10px; padding: 7px 10px; border-radius: var(--radius-sm); line-height: 1.45; }
+.login-msg:empty { display: none; }
+.login-msg.error { background: #fee2e2; color: #991b1b; }
+.login-msg.info  { background: var(--tag-bg); color: var(--tag-fg); }
+.login-enviado { font-size: .78rem; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+.login-enviado b { color: var(--text); }
+[hidden] { display: none !important; }
+
+/* ─────────────────────────────────────────────────
+   DENIED SCREEN
+───────────────────────────────────────────────── */
+#denied-screen {
+  display        : none;
+  flex-direction : column;
+  align-items    : center;
+  justify-content: center;
+  height         : 100vh;
+}
+.denied-box {
+  background   : var(--surface);
+  border       : 1px solid var(--border);
+  border-radius: var(--radius);
+  padding      : 48px 40px;
+  max-width    : 380px;
+  width        : 100%;
+  text-align   : center;
+  box-shadow   : var(--shadow-md);
+}
+.denied-icon  { font-size: 3rem; margin-bottom: 16px; display: block; }
+.denied-title { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.denied-msg   { font-size: .8rem; color: var(--muted); line-height: 1.6; margin-bottom: 20px; }
+.denied-email { background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 14px; font-size: .78rem; color: var(--muted); margin-bottom: 20px; }
+.btn-logout   { padding: 8px 20px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: .78rem; cursor: pointer; }
+.btn-logout:hover { background: #f8fafc; }
+
+/* ─────────────────────────────────────────────────
+   APP WRAPPER
+───────────────────────────────────────────────── */
+#app {
+  display       : none;
+  flex-direction: column;
+  height        : 100vh;
+  overflow      : hidden;
+}
+
+/* ─────────────────────────────────────────────────
+   HEADER
+───────────────────────────────────────────────── */
+#app-header {
+  height         : var(--header-h);
+  background     : var(--accent2);
+  display        : flex;
+  align-items    : center;
+  padding        : 0 20px;
+  gap            : 12px;
+  flex-shrink    : 0;
+  border-bottom  : 1px solid rgba(255,255,255,.06);
+}
+.hdr-logo    { font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem; color: var(--accent); letter-spacing: 2px; white-space: nowrap; }
+.hdr-name    { font-size: .78rem; color: rgba(255,255,255,.55); white-space: nowrap; }
+.hdr-version { font-size: .68rem; color: rgba(255,255,255,.3); margin-left: 4px; }
+.hdr-sep     { flex: 1; }
+.hdr-refran  {
+  font-size    : .72rem;
+  color        : rgba(255,255,255,.4);
+  font-style   : italic;
+  max-width    : 380px;
+  overflow     : hidden;
+  text-overflow: ellipsis;
+  white-space  : nowrap;
+}
+#auth-status {
+  width        : 6px;
+  height       : 6px;
+  border-radius: 50%;
+  background   : var(--success);
+  flex-shrink  : 0;
+  transition   : background .3s;
+}
+#auth-status.refreshing {
+  background: var(--accent);
+  animation : pulse-auth .8s ease infinite;
+}
+@keyframes pulse-auth { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+
+.hdr-refresh {
+  background   : transparent;
+  border       : 1px solid rgba(255,255,255,.18);
+  color        : rgba(255,255,255,.6);
+  border-radius: var(--radius-sm);
+  padding      : 5px 10px;
+  font-size    : .72rem;
+  display      : flex;
+  align-items  : center;
+  gap          : 5px;
+  transition   : all .15s;
+}
+.hdr-refresh:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+/* v13.0: Resumen DOCX — botón header (desktop only) */
+.hdr-resumen-docx {
+  background   : transparent;
+  border       : 1px solid rgba(255,255,255,.18);
+  color        : rgba(255,255,255,.6);
+  border-radius: var(--radius-sm);
+  padding      : 5px 10px;
+  font-size    : .72rem;
+  display      : flex;
+  align-items  : center;
+  gap          : 5px;
+  cursor       : pointer;
+  font-family  : inherit;
+  transition   : all .15s;
+}
+.hdr-resumen-docx:hover { background: rgba(255,255,255,.08); color: #fff; }
+
+/* v13.0: Modal Resumen DOCX */
+#resumen-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(15,23,42,.55);
+  z-index: 500;
+  align-items: center;
+  justify-content: center;
+}
+#resumen-overlay.visible { display: flex; }
+#resumen-modal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  width: 420px;
+  max-width: 92vw;
+  padding: 22px;
+}
+#resumen-modal .rm-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.15rem;
+  letter-spacing: 1px;
+  color: var(--accent2);
+  margin-bottom: 4px;
+}
+#resumen-modal .rm-sub {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+#resumen-modal label {
+  display: block;
+  font-size: .72rem;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+  margin-top: 12px;
+}
+#resumen-modal .rm-fechas {
+  display: flex;
+  gap: 10px;
+}
+#resumen-modal input[type="date"],
+#resumen-modal input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  font-size: .82rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+}
+#resumen-modal .rm-hint {
+  font-size: .68rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+#resumen-modal .rm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+#resumen-modal .rm-btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  font-size: .8rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+#resumen-modal .rm-btn-generar {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: .8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+#resumen-modal .rm-btn-generar:disabled { opacity: .55; cursor: default; }
+#resumen-modal .rm-status {
+  font-size: .74rem;
+  color: var(--muted);
+  margin-top: 10px;
+  min-height: 16px;
+}
+.btn-instalar-pwa {
+  background   : transparent;
+  border       : 1px solid rgba(217,119,6,.7);
+  color        : #d97706;
+  border-radius: var(--radius-sm);
+  padding      : 5px 10px;
+  font-size    : .72rem;
+  display      : flex;
+  align-items  : center;
+  gap          : 5px;
+  transition   : all .15s;
+  font-family  : inherit;
+}
+.btn-instalar-pwa:hover { background: rgba(217,119,6,.15); color: #fbbf24; border-color: #fbbf24; }
+.hdr-refresh.spin svg { animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.hdr-user { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.2); object-fit: cover; background: rgba(255,255,255,.1); }
+
+/* ─────────────────────────────────────────────────
+   MAIN LAYOUT
+───────────────────────────────────────────────── */
+#main {
+  display   : flex;
+  flex      : 1;
+  overflow  : hidden;
+  background: var(--bg);
+  padding   : 8px;
+  gap       : 0;
+}
+
+#panel-left,
+#postit-col,
+#panel-right {
+  border-radius: 12px;
+  box-shadow   : 0 1px 4px rgba(0,0,0,.07), 0 0 0 .5px rgba(0,0,0,.06);
+  overflow     : hidden;
+}
+
+/* ─────────────────────────────────────────────────
+   PANEL IZQUIERDO — Anotador
+───────────────────────────────────────────────── */
+#panel-left {
+  display       : flex;
+  flex-direction: column;
+  width         : 52%;
+  min-width     : 280px;
+  background    : var(--surface);
+  overflow      : hidden;
+  flex-shrink   : 0;
+}
+.panel-header {
+  padding        : 14px 16px 10px;
+  border-bottom  : 1px solid var(--border);
+  display        : flex;
+  align-items    : center;
+  gap            : 8px;
+  flex-shrink    : 0;
+}
+.panel-title {
+  font-size  : .68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color      : var(--muted);
+}
+
+/* ── Etiquetas ─────────────────────────────────── */
+#etiquetas-wrap {
+  padding      : 10px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink  : 0;
+}
+.etiq-label {
+  font-size     : .67rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color         : var(--muted);
+  margin-bottom : 7px;
+}
+#etiquetas-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.etiq-chip {
+  padding      : 3px 10px;
+  border-radius: 99px;
+  background   : var(--tag-bg);
+  color        : var(--tag-fg);
+  font-size    : .72rem;
+  font-weight  : 500;
+  border       : 1.5px solid transparent;
+  cursor       : pointer;
+  transition   : all .15s;
+  user-select  : none;
+}
+.etiq-chip:hover  { border-color: var(--accent); }
+.etiq-chip.active { background: var(--tag-sel); color: var(--tag-sfg); border-color: var(--tag-sel); }
+
+/* ── Toggle horario — v11 ────────────────────── */
+#horario-wrap {
+  padding      : 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink  : 0;
+  background   : #fafafa;
+}
+.horario-row {
+  display    : flex;
+  align-items: center;
+  gap        : 10px;
+}
+.horario-label {
+  font-size     : .67rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color         : var(--muted);
+  flex          : 1;
+}
+/* Toggle switch */
+.toggle-switch {
+  position : relative;
+  width    : 36px;
+  height   : 20px;
+  flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position     : absolute;
+  inset        : 0;
+  background   : #cbd5e1;
+  border-radius: 99px;
+  cursor       : pointer;
+  transition   : background .2s;
+}
+.toggle-track::after {
+  content      : '';
+  position     : absolute;
+  top          : 2px; left: 2px;
+  width        : 16px; height: 16px;
+  border-radius: 50%;
+  background   : #fff;
+  box-shadow   : 0 1px 3px rgba(0,0,0,.2);
+  transition   : transform .2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+.toggle-switch input:checked + .toggle-track::after { transform: translateX(16px); }
+
+/* Selectores de hora estilo alarma */
+#horario-selectores {
+  display        : none;
+  align-items    : center;
+  gap            : 12px;
+  margin-top     : 8px;
+  flex-wrap      : wrap;
+}
+#horario-selectores.visible { display: flex; }
+
+.time-picker {
+  display       : flex;
+  flex-direction: column;
+  align-items   : center;
+  gap           : 2px;
+}
+.time-picker-label {
+  font-size  : .62rem;
+  color      : var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 2px;
+}
+.time-picker-ctrl {
+  display      : flex;
+  flex-direction: column;
+  align-items  : center;
+  background   : var(--surface);
+  border       : 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow     : hidden;
+  width        : 68px;
+}
+.time-arrow {
+  width     : 100%;
+  padding   : 3px 0;
+  background: transparent;
+  border    : none;
+  color     : var(--muted);
+  font-size : .9rem;
+  line-height: 1;
+  cursor    : pointer;
+  transition: background .12s, color .12s;
+  display   : flex;
+  align-items    : center;
+  justify-content: center;
+}
+.time-arrow:hover { background: var(--tag-bg); color: var(--accent); }
+.time-value {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size  : 1.3rem;
+  letter-spacing: 1px;
+  color      : var(--accent2);
+  padding    : 2px 0;
+  min-width  : 52px;
+  text-align : center;
+  user-select: none;
+  line-height: 1.1;
+}
+.time-sep {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size  : 1.4rem;
+  color      : var(--muted);
+  margin-top : 18px;
+  align-self : center;
+}
+.horario-preview {
+  font-size  : .72rem;
+  color      : var(--accent);
+  font-weight: 600;
+  background : var(--tag-bg);
+  border-radius: var(--radius-sm);
+  padding    : 3px 8px;
+  align-self : center;
+  white-space: nowrap;
+  margin-top : 18px;
+}
+
+/* ── Borrador local — v14.0 ───────────────────── */
+#draft-banner {
+  display        : none;
+  align-items    : center;
+  justify-content: space-between;
+  gap            : 8px;
+  background     : #fff7ed;
+  border         : 1px solid #fdba74;
+  color          : #9a3412;
+  border-radius  : var(--radius-sm);
+  padding        : 6px 10px;
+  font-size      : .72rem;
+  font-weight    : 600;
+  margin         : 0 0 8px 0;
+}
+#draft-banner.visible { display: flex; }
+#draft-banner-btns { display: flex; align-items: center; gap: 6px; }
+#draft-banner-descartar {
+  background   : none;
+  border       : 1px solid #fdba74;
+  color        : #9a3412;
+  border-radius: var(--radius-sm);
+  padding      : 2px 8px;
+  font-size    : .68rem;
+  font-weight  : 600;
+  cursor       : pointer;
+  white-space  : nowrap;
+}
+#draft-banner-descartar:hover { background: #fdba74; color: #7c2d12; }
+/* v14.1: cerrar el aviso sin descartar el borrador (separado de "Descartar") */
+#draft-banner-cerrar {
+  background   : none;
+  border       : none;
+  color        : #9a3412;
+  padding      : 2px 4px;
+  font-size    : .78rem;
+  font-weight  : 700;
+  line-height  : 1;
+  cursor       : pointer;
+  opacity      : .6;
+}
+#draft-banner-cerrar:hover { opacity: 1; }
+
+/* ── Editor Quill ──────────────────────────────── */
+#editor-wrap {
+  flex          : 1;
+  display       : flex;
+  flex-direction: column;
+  overflow      : hidden;
+  min-height    : 0;
+}
+.ql-toolbar.ql-snow {
+  border       : none;
+  border-bottom: 1px solid var(--border) !important;
+  padding      : 8px 12px;
+  flex-shrink  : 0;
+  background   : #f8fafc;
+}
+.ql-container.ql-snow {
+  border     : none !important;
+  flex       : 1;
+  overflow   : auto;
+  font-family: 'DM Sans', sans-serif;
+  font-size  : 14px;
+}
+.ql-editor { min-height: 160px; padding: 16px 20px; }
+.ql-editor p { margin-bottom: 4px; }
+#quill-host {
+  display       : flex;
+  flex-direction: column;
+  flex          : 1;
+  overflow      : hidden;
+  min-height    : 0;
+}
+
+/* ── Footer del panel izquierdo ────────────────── */
+#panel-left-footer {
+  padding        : 12px 16px;
+  border-top     : 1px solid var(--border);
+  display        : flex;
+  align-items    : center;
+  justify-content: space-between;
+  gap            : 8px;
+  flex-shrink    : 0;
+  background     : #f8fafc;
+}
+.footer-info     { font-size: .7rem; color: var(--muted); }
+.footer-info span { font-weight: 600; color: var(--text); }
+.btn-guardar {
+  display      : flex;
+  align-items  : center;
+  gap          : 6px;
+  padding      : 9px 20px;
+  background   : var(--accent);
+  color        : #fff;
+  border       : none;
+  border-radius: var(--radius-sm);
+  font-size    : .8rem;
+  font-weight  : 600;
+  letter-spacing: .02em;
+  transition   : all .15s;
+  white-space  : nowrap;
+}
+.btn-guardar:hover    { background: #b45309; transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn-guardar:active   { transform: translateY(0); }
+.btn-guardar:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* ── v15.0: toggle "Otra fecha" ────────────────── */
+#fecha-wrap {
+  padding      : 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink  : 0;
+  background   : #fafafa;
+}
+#fecha-selector { display: none; align-items: center; gap: 10px; margin-top: 8px; }
+#fecha-selector.visible { display: flex; }
+#input-fecha {
+  font-family: inherit; font-size: .82rem; padding: 5px 8px; color: var(--text);
+  border: 1.5px solid #93c5fd; border-radius: var(--radius-sm); background: #fff;
+}
+.fecha-hint { font-size: .68rem; color: var(--muted); }
+.chip-fecha {
+  display: none; font-size: .66rem; font-weight: 700; padding: 2px 8px; border-radius: 99px;
+  background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; white-space: nowrap;
+}
+.chip-fecha.visible { display: inline-flex; }
+
+/* ── v15.0: modo edición del Anotador ──────────── */
+#panel-left.modo-edicion .panel-header { background: #ede9fe; }
+#panel-left.modo-edicion .panel-title  { color: #5b21b6; }
+#panel-left.modo-edicion #panel-left-footer { background: #f5f3ff; }
+#panel-left.modo-edicion .btn-guardar { background: #6d28d9; }
+#panel-left.modo-edicion .btn-guardar:hover { background: #5b21b6; }
+.btn-cancelar-edicion {
+  display: none; padding: 9px 14px; border-radius: var(--radius-sm); border: 1px solid #c4b5fd;
+  background: #fff; color: #5b21b6; font-size: .78rem; font-weight: 600; white-space: nowrap;
+}
+.btn-cancelar-edicion:hover { background: #ede9fe; }
+#panel-left.modo-edicion .btn-cancelar-edicion { display: inline-flex; }
+.footer-botones { display: flex; align-items: center; gap: 8px; }
+
+/* ── v15.0: acciones de la tarjeta de nota (✏️ 🗑 🔒) ── */
+.nota-acciones { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.nota-accion {
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 1px 5px;
+  font-size: .78rem; line-height: 1.3; color: var(--muted); opacity: .55; transition: all .15s;
+}
+.nota-card:hover .nota-accion { opacity: 1; }
+.nota-accion:hover:not(:disabled) { border-color: var(--border); background: #f8fafc; }
+.nota-accion:disabled { opacity: .2 !important; cursor: not-allowed; }
+.nota-lock { font-size: .68rem; opacity: .45; cursor: help; }
+.nota-card.en-edicion { border-color: #a78bfa; box-shadow: 0 0 0 2px #ede9fe; }
+.nota-editada { font-size: .62rem; color: var(--muted); font-style: italic; }
+
+/* ── v15.0: botón Papelera (panel HOY) y modal ──── */
+.btn-papelera { font-size: .78rem; }
+#papelera-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 900;
+  align-items: center; justify-content: center; padding: 16px;
+}
+#papelera-overlay.visible { display: flex; }
+#papelera-modal {
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-md);
+  width: 100%; max-width: 560px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden;
+}
+.pap-header { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.pap-title  { font-weight: 700; font-size: .9rem; flex: 1; }
+.pap-close  { background: none; border: none; font-size: 1rem; color: var(--muted); }
+.pap-sub    { font-size: .72rem; color: var(--muted); padding: 8px 16px 0; }
+#papelera-lista { overflow-y: auto; padding: 10px 16px 16px; display: flex; flex-direction: column; gap: 8px; }
+.pap-item { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; background: #f8fafc; }
+.pap-meta { display: flex; align-items: center; gap: 8px; font-size: .68rem; color: var(--muted); margin-bottom: 4px; }
+.pap-texto { font-size: .78rem; color: var(--text); white-space: pre-line; max-height: 4.6em; overflow: hidden; }
+.pap-restaurar {
+  margin-left: auto; padding: 3px 10px; border-radius: 6px; border: 1px solid #86efac;
+  background: #dcfce7; color: #166534; font-size: .72rem; font-weight: 600;
+}
+.pap-restaurar:disabled { opacity: .5; cursor: wait; }
+
+/* ── v15.0: avatar con inicial (click = cerrar sesión) ── */
+span.hdr-user {
+  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  font-size: .78rem; font-weight: 700; cursor: pointer; user-select: none;
+}
+
+/* Toast */
+#toast {
+  position     : fixed;
+  bottom       : calc(var(--toolbar-h) + 16px);
+  left         : 50%;
+  transform    : translateX(-50%) translateY(12px);
+  background   : var(--accent2);
+  color        : #fff;
+  padding      : 10px 20px;
+  border-radius: var(--radius-sm);
+  font-size    : .78rem;
+  font-weight  : 500;
+  opacity      : 0;
+  transition   : all .25s ease;
+  pointer-events: none;
+  z-index      : 999;
+  white-space  : nowrap;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ─────────────────────────────────────────────────
+   COLUMNA POSTITS
+───────────────────────────────────────────────── */
+#postit-col {
+  width         : var(--postit-w);
+  min-width     : var(--postit-min);
+  max-width     : var(--postit-max);
+  display       : flex;
+  flex-direction: column;
+  background    : #fffbeb;
+  overflow      : hidden;
+  flex-shrink   : 0;
+  position      : relative;
+}
+.postit-col-header {
+  padding        : 10px 10px 8px;
+  border-bottom  : 1px solid var(--border);
+  display        : flex;
+  align-items    : center;
+  justify-content: space-between;
+  flex-shrink    : 0;
+  background     : #fef9c3;
+}
+.postit-col-title {
+  font-size     : .64rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color         : #78350f;
+}
+/* Botón + en desktop */
+.btn-add-postit {
+  width        : 22px;
+  height       : 22px;
+  border-radius: 50%;
+  background   : var(--accent);
+  color        : #fff;
+  border       : none;
+  font-size    : 1rem;
+  line-height  : 1;
+  display      : flex;
+  align-items  : center;
+  justify-content: center;
+  transition   : all .15s;
+  flex-shrink  : 0;
+}
+.btn-add-postit:hover { background: #b45309; transform: scale(1.1); }
+
+#postit-list {
+  flex      : 1;
+  overflow-y: auto;
+  padding   : 8px 6px;
+  display   : flex;
+  flex-direction: column;
+  gap       : 6px;
+}
+#postit-list::-webkit-scrollbar { width: 3px; }
+#postit-list::-webkit-scrollbar-thumb { background: #fde68a; border-radius: 2px; }
+
+.postit-card {
+  border-radius: 6px;
+  padding      : 8px 8px 6px;
+  position     : relative;
+  box-shadow   : 0 2px 6px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+  animation    : popIn .2s ease;
+  transition   : box-shadow .15s, opacity .15s, transform .15s;
+  min-height   : 56px;
+  cursor       : grab;
+}
+.postit-card:active { cursor: grabbing; }
+@keyframes popIn { from { opacity:0; transform: scale(.92) translateY(4px); } to { opacity:1; transform: none; } }
+.postit-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.14); }
+.postit-card.dragging-src { opacity: 0.45; transform: scale(.96); box-shadow: none; }
+.postit-card.drag-over-top    { border-top   : 2.5px solid var(--accent); }
+.postit-card.drag-over-bottom { border-bottom: 2.5px solid var(--accent); }
+
+.postit-del {
+  position     : absolute;
+  top          : 4px; right: 4px;
+  width        : 16px; height: 16px;
+  border-radius: 50%;
+  background   : rgba(0,0,0,.12);
+  border       : none;
+  color        : rgba(0,0,0,.5);
+  font-size    : .6rem;
+  display      : flex;
+  align-items  : center;
+  justify-content: center;
+  opacity      : 0;
+  transition   : all .15s;
+  cursor       : pointer;
+}
+.postit-card:hover .postit-del { opacity: 1; }
+.postit-del:hover { background: rgba(220,38,38,.85); color: #fff; }
+
+.postit-text {
+  font-size  : .75rem;
+  color      : #1e293b;
+  line-height: 1.45;
+  word-break : break-word;
+  padding-right: 14px;
+  margin-top : 2px;
+  cursor     : text;
+  min-height : 28px;
+  outline    : none;
+  white-space: pre-wrap;
+}
+.postit-text[contenteditable="true"] {
+  background   : rgba(255,255,255,.55);
+  border-radius: 4px;
+  padding      : 2px 4px;
+}
+.postit-text[contenteditable="true"]:focus {
+  background: rgba(255,255,255,.9);
+  box-shadow: 0 0 0 2px rgba(217,119,6,.4);
+  outline   : none;
+}
+.postit-colors { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.postit-color-dot {
+  width        : 10px; height: 10px;
+  border-radius: 50%;
+  border       : 1.5px solid rgba(0,0,0,.15);
+  cursor       : pointer;
+  transition   : transform .15s;
+  flex-shrink  : 0;
+}
+.postit-color-dot:hover { transform: scale(1.3); }
+.postit-color-dot.selected { border-color: rgba(0,0,0,.5); transform: scale(1.15); }
+.postit-footer {
+  font-size  : .58rem;
+  color      : rgba(0,0,0,.35);
+  margin-top : 5px;
+  display    : flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Form nuevo PostIt — desktop */
+.postit-nuevo-form { padding: 0; }
+.postit-new-input {
+  border       : 1.5px dashed #fbbf24;
+  border-radius: 6px;
+  padding      : 8px;
+  font-size    : .75rem;
+  font-family  : inherit;
+  resize       : none;
+  background   : rgba(255,255,255,.7);
+  color        : var(--text);
+  width        : 100%;
+  min-height   : 60px;
+  outline      : none;
+  transition   : border-color .15s;
+  line-height  : 1.45;
+}
+.postit-new-input:focus { border-color: var(--accent); background: #fff; }
+.postit-new-actions { display: flex; gap: 4px; justify-content: flex-end; margin-top: 4px; }
+.btn-pi-ok, .btn-pi-cancel {
+  padding      : 3px 10px;
+  border-radius: var(--radius-sm);
+  border       : none;
+  font-size    : .7rem;
+  font-weight  : 600;
+  cursor       : pointer;
+  transition   : all .15s;
+}
+.btn-pi-ok     { background: var(--accent); color: #fff; }
+.btn-pi-ok:hover { background: #b45309; }
+.btn-pi-cancel { background: var(--border); color: var(--muted); }
+.btn-pi-cancel:hover { background: #cbd5e1; }
+
+/* ─────────────────────────────────────────────────
+   FAB — Botón flotante nuevo PostIt (mobile) — v11
+───────────────────────────────────────────────── */
+#fab-nuevo-postit {
+  display      : none; /* solo mobile lo activa */
+  position     : fixed;
+  bottom       : 80px;
+  right        : 20px;
+  width        : 52px;
+  height       : 52px;
+  border-radius: 50%;
+  background   : var(--accent);
+  color        : #fff;
+  border       : none;
+  font-size    : 1.6rem;
+  line-height  : 1;
+  box-shadow   : 0 4px 16px rgba(217,119,6,.45);
+  z-index      : 200;
+  align-items  : center;
+  justify-content: center;
+  transition   : transform .15s, box-shadow .15s;
+}
+#fab-nuevo-postit:hover  { transform: scale(1.08); box-shadow: 0 6px 20px rgba(217,119,6,.55); }
+#fab-nuevo-postit:active { transform: scale(.96); }
+
+/* ─────────────────────────────────────────────────
+   BOTTOM SHEET — Formulario nuevo PostIt (mobile) — v11
+───────────────────────────────────────────────── */
+#postit-bottom-sheet {
+  display        : none;
+  position       : fixed;
+  bottom         : 0; left: 0; right: 0;
+  background     : var(--surface);
+  border-radius  : 16px 16px 0 0;
+  box-shadow     : 0 -4px 24px rgba(0,0,0,.15);
+  z-index        : 300;
+  padding        : 16px 20px 32px;
+  transform      : translateY(100%);
+  transition     : transform .3s cubic-bezier(.4,0,.2,1);
+}
+#postit-bottom-sheet.visible {
+  display  : block;
+  transform: translateY(0);
+}
+.bs-handle {
+  width        : 36px;
+  height       : 4px;
+  background   : var(--border);
+  border-radius: 99px;
+  margin       : 0 auto 16px;
+}
+.bs-title {
+  font-size  : .78rem;
+  font-weight: 600;
+  color      : var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: 12px;
+}
+.bs-colors { display: flex; gap: 8px; margin-bottom: 10px; }
+.bs-color-dot {
+  width        : 22px;
+  height       : 22px;
+  border-radius: 50%;
+  border       : 2px solid rgba(0,0,0,.12);
+  cursor       : pointer;
+  transition   : transform .15s, border-color .15s;
+}
+.bs-color-dot:hover   { transform: scale(1.15); }
+.bs-color-dot.selected { border-color: var(--accent2); transform: scale(1.15); }
+#bs-textarea {
+  width        : 100%;
+  min-height   : 90px;
+  border       : 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding      : 10px 12px;
+  font-size    : .85rem;
+  font-family  : inherit;
+  resize       : none;
+  outline      : none;
+  color        : var(--text);
+  line-height  : 1.5;
+  transition   : border-color .15s;
+  margin-bottom: 12px;
+}
+#bs-textarea:focus { border-color: var(--accent); }
+.bs-actions { display: flex; gap: 8px; }
+#bs-btn-ok {
+  flex         : 1;
+  padding      : 10px;
+  background   : var(--accent);
+  color        : #fff;
+  border       : none;
+  border-radius: var(--radius-sm);
+  font-size    : .85rem;
+  font-weight  : 600;
+  font-family  : inherit;
+  cursor       : pointer;
+  transition   : background .15s;
+}
+#bs-btn-ok:hover { background: #b45309; }
+#bs-btn-cancel {
+  padding      : 10px 16px;
+  background   : var(--bg);
+  color        : var(--muted);
+  border       : 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size    : .85rem;
+  font-family  : inherit;
+  cursor       : pointer;
+}
+/* Overlay oscuro detrás del bottom sheet */
+#bs-overlay {
+  display  : none;
+  position : fixed;
+  inset    : 0;
+  background: rgba(0,0,0,.35);
+  z-index  : 299;
+  backdrop-filter: blur(2px);
+}
+#bs-overlay.visible { display: block; }
+
+/* ─────────────────────────────────────────────────
+   RESIZER
+───────────────────────────────────────────────── */
+.resizer {
+  width      : 8px;
+  background : transparent;
+  cursor     : col-resize;
+  flex-shrink: 0;
+  position   : relative;
+}
+.resizer::after {
+  content      : '';
+  position     : absolute;
+  top          : 50%; left: 50%;
+  transform    : translate(-50%, -50%);
+  width        : 4px; height: 32px;
+  background   : transparent;
+  border-radius: 99px;
+  transition   : background .2s;
+}
+.resizer:hover::after, .resizer.dragging::after { background: var(--accent); opacity: .55; }
+
+/* ─────────────────────────────────────────────────
+   PANEL DERECHO — Hoy
+───────────────────────────────────────────────── */
+#panel-right {
+  display       : flex;
+  flex-direction: column;
+  flex          : 1;
+  overflow      : hidden;
+  background    : var(--panel-right-bg);
+  min-width     : 240px;
+  transition    : background .4s ease;
+}
+#panel-right.es-pasado { --panel-right-bg: #eef2f9; }
+
+.panel-right-header {
+  padding        : 10px 14px 8px;
+  display        : flex;
+  align-items    : center;
+  gap            : 6px;
+  flex-shrink    : 0;
+}
+.today-nav-btn {
+  background   : none;
+  border       : 1.5px solid var(--border);
+  color        : var(--muted);
+  border-radius: 6px;
+  width        : 26px; height: 26px;
+  display      : flex;
+  align-items  : center;
+  justify-content: center;
+  cursor       : pointer;
+  transition   : all .15s;
+  flex-shrink  : 0;
+  font-size    : .75rem;
+  padding      : 0;
+}
+.today-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: rgba(217,119,6,.06); }
+.today-nav-btn:disabled { opacity: .25; cursor: not-allowed; }
+.today-nav-center {
+  flex        : 1;
+  display     : flex;
+  flex-direction: column;
+  align-items : center;
+  min-width   : 0;
+}
+.today-label {
+  font-family  : 'Bebas Neue', sans-serif;
+  font-size    : 1.3rem;
+  color        : var(--accent2);
+  letter-spacing: 1px;
+  line-height  : 1;
+  white-space  : nowrap;
+  transition   : color .3s;
+}
+#panel-right.es-pasado .today-label { color: #3b5998; }
+.today-date { font-size: .68rem; color: var(--muted); font-weight: 500; white-space: nowrap; }
+
+#refran-box {
+  margin       : 0 16px 10px;
+  padding      : 10px 14px;
+  background   : var(--surface);
+  border       : 1px solid var(--border);
+  border-left  : 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size    : .76rem;
+  color        : var(--muted);
+  font-style   : italic;
+  line-height  : 1.5;
+  flex-shrink  : 0;
+}
+
+#notas-list {
+  flex          : 1;
+  overflow-y    : auto;
+  padding       : 0 16px 12px;
+  display       : flex;
+  flex-direction: column;
+  gap           : 8px;
+}
+.nota-card {
+  background   : var(--surface);
+  border       : 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding      : 10px 14px;
+  transition   : box-shadow .15s;
+  animation    : fadeIn .25s ease;
+}
+@keyframes fadeIn { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+.nota-card:hover { box-shadow: var(--shadow-md); }
+.nota-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.nota-hora { font-size: .68rem; color: var(--muted); font-weight: 500; }
+.nota-etiq {
+  font-size     : .66rem;
+  font-weight   : 600;
+  padding       : 2px 8px;
+  border-radius : 99px;
+  background    : var(--tag-bg);
+  color         : var(--tag-fg);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.nota-contenido { font-size: .8rem; color: var(--text); line-height: 1.55; }
+.nota-contenido p { margin: 0 0 2px; }
+.nota-contenido * { max-width: 100%; }
+.nota-contenido ol, .nota-contenido ul { margin: 4px 0 4px 20px; padding: 0; }
+.nota-contenido ol { list-style-type: decimal; }
+.nota-contenido ul { list-style-type: disc; }
+.nota-contenido li { margin-bottom: 2px; }
+.nota-contenido strong { font-weight: 600; }
+.nota-contenido em     { font-style: italic; }
+.nota-contenido u      { text-decoration: underline; }
+.nota-contenido a      { color: var(--accent); text-decoration: none; }
+.nota-contenido a:hover{ text-decoration: underline; }
+.notas-empty { text-align: center; color: var(--muted); font-size: .8rem; padding: 40px 20px; }
+.notas-empty-icon { font-size: 2.4rem; display: block; margin-bottom: 10px; }
+
+/* Línea de horario en nota — v11.2: violeta para distinguir de etiqueta */
+.nota-contenido .nota-horario {
+  display      : inline-flex;
+  align-items  : center;
+  gap          : 5px;
+  font-size    : .72rem;
+  font-weight  : 600;
+  color        : #3C3489;
+  background   : #EEEDFE;
+  border-left  : 3px solid #7F77DD;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding      : 3px 10px 3px 8px;
+  margin-bottom: 6px;
+  font-style   : normal;
+}
+
+/* Notas colapsables */
+.nota-contenido-wrap {
+  position  : relative;
+  overflow  : hidden;
+  transition: max-height .35s cubic-bezier(.4,0,.2,1);
+  max-height: 9999px;
+}
+.nota-contenido-wrap.collapsed { max-height: 80px; }
+.nota-contenido-wrap.collapsed::after {
+  content   : '';
+  position  : absolute;
+  bottom    : 0; left: 0; right: 0;
+  height    : 36px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+}
+.nota-expand-btn {
+  display      : flex;
+  align-items  : center;
+  gap          : 4px;
+  margin-top   : 6px;
+  padding      : 3px 0;
+  background   : none;
+  border       : none;
+  color        : var(--accent);
+  font-size    : .72rem;
+  font-weight  : 600;
+  font-family  : inherit;
+  cursor       : pointer;
+  letter-spacing: .01em;
+  transition   : color .15s;
+  user-select  : none;
+}
+.nota-expand-btn:hover { color: #b45309; }
+.nota-expand-btn svg   { transition: transform .3s ease; flex-shrink: 0; }
+.nota-expand-btn.expanded svg { transform: rotate(180deg); }
+
+/* ─────────────────────────────────────────────────
+   TOOLBAR
+───────────────────────────────────────────────── */
+#toolbar {
+  height         : var(--toolbar-h);
+  background     : rgba(255,255,255,.88);
+  backdrop-filter: blur(12px);
+  border-top     : 1px solid var(--border);
+  display        : flex;
+  align-items    : center;
+  justify-content: center;
+  padding        : 0 20px;
+  gap            : 6px;
+  flex-shrink    : 0;
+  overflow-x     : auto;
+  overflow-y     : hidden;
+}
+#toolbar::-webkit-scrollbar { height: 3px; }
+#toolbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.tool-btn {
+  display       : flex;
+  flex-direction: column;
+  align-items   : center;
+  gap           : 4px;
+  padding       : 8px 12px;
+  border-radius : var(--radius-sm);
+  border        : none;
+  background    : transparent;
+  cursor        : pointer;
+  transition    : all .15s;
+  min-width     : 60px;
+  white-space   : nowrap;
+  text-decoration: none;
+  color         : var(--text);
+}
+.tool-btn:hover { background: rgba(0,0,0,.05); transform: translateY(-3px) scale(1.05); }
+.tool-emoji { font-size: 1.6rem; line-height: 1; }
+.tool-label { font-size: .6rem; color: var(--muted); font-weight: 500; }
+
+/* Skeleton */
+.skel {
+  background    : linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation     : shimmer 1.4s infinite;
+  border-radius : var(--radius-sm);
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* Scrollbars */
+::-webkit-scrollbar       { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #c0c8d4; }
+
+/* ─────────────────────────────────────────────────
+   MOBILE TABS — v10.1 + badge HOY v11
+───────────────────────────────────────────────── */
+#mobile-tabs { display: none; }
+
+/* Badge sobre ícono del tab */
+.mob-tab-icon-wrap {
+  position: relative;
+  display : inline-flex;
+}
+.mob-tab-badge {
+  position     : absolute;
+  top          : -4px;
+  right        : -6px;
+  min-width    : 16px;
+  height       : 16px;
+  background   : var(--accent);
+  color        : #fff;
+  border-radius: 99px;
+  font-size    : .55rem;
+  font-weight  : 700;
+  display      : none;
+  align-items  : center;
+  justify-content: center;
+  padding      : 0 3px;
+  line-height  : 1;
+}
+.mob-tab-badge.visible { display: flex; }
+
+@media (max-width: 720px) {
+  /* C: solo ícono en header — ocultar texto y versión */
+  .hdr-logo    { display: none; }
+  .hdr-name    { display: none; }
+  .hdr-refran  { display: none; }
+  /* v13.0: Resumen DOCX es funcionalidad solo desktop */
+  .hdr-resumen-docx { display: none; }
+  /* versión: se mueve al lado del emoji como badge compacto */
+  .hdr-version {
+    font-size  : .62rem;
+    color      : rgba(255,255,255,.45);
+    margin-left: 2px;
+    font-weight: 500;
+  }
+
+  #app { --toolbar-h: 0px; }
+  #toolbar { display: none; }
+
+  #main {
+    padding-bottom: 60px;
+    flex-direction: row;
+    overflow      : hidden;
+    position      : relative;
+    padding       : 8px;
+  }
+
+  #panel-left,
+  #postit-col,
+  #panel-right {
+    position  : absolute;
+    top       : 0; left: 8px; right: 8px; bottom: 60px;
+    width     : auto !important;
+    min-width : 0  !important;
+    max-width : none !important;
+    border-radius: 12px;
+    display   : none;
+    flex-direction: column;
+  }
+  #panel-left.tab-active,
+  #postit-col.tab-active,
+  #panel-right.tab-active { display: flex; }
+
+  /* PostIts mobile — grilla 2 columnas */
+  #postit-list {
+    flex-direction: row;
+    flex-wrap     : wrap;
+    overflow-x    : hidden;
+    overflow-y    : auto;
+    padding       : 8px 8px 80px;
+    gap           : 8px;
+    align-content : flex-start;
+  }
+  .postit-card {
+    width        : calc(50% - 4px);
+    min-width    : 0;
+    max-width    : none;
+    flex-shrink  : 0;
+    height       : auto !important;
+    min-height   : 0  !important;
+    cursor       : default;
+  }
+  .postit-card .postit-text {
+    white-space  : normal;
+    overflow     : hidden;
+    display      : -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+  }
+
+  /* Ocultar formulario fijo de postit en mobile (reemplazado por bottom sheet) */
+  .postit-nuevo-form { display: none !important; }
+
+  /* Ocultar btn + del header de postits en mobile (reemplazado por FAB) */
+  #btn-add-postit { display: none; }
+
+  /* Mostrar FAB */
+  #fab-nuevo-postit { display: flex; }
+
+  .resizer { display: none; }
+
+  /* Tab bar */
+  #mobile-tabs {
+    display        : flex;
+    position       : fixed;
+    bottom         : 0; left: 0; right: 0;
+    height         : 60px;
+    background     : rgba(255,255,255,.96);
+    backdrop-filter: blur(12px);
+    border-top     : 1px solid var(--border);
+    z-index        : 100;
+    align-items    : stretch;
+  }
+  .mob-tab {
+    flex           : 1;
+    display        : flex;
+    flex-direction : column;
+    align-items    : center;
+    justify-content: center;
+    gap            : 3px;
+    border         : none;
+    background     : transparent;
+    cursor         : pointer;
+    font-family    : inherit;
+    color          : var(--muted);
+    transition     : color .15s;
+    padding        : 0;
+    position       : relative;
+  }
+  .mob-tab.active { color: var(--accent); }
+  .mob-tab.active::before {
+    content      : '';
+    position     : absolute;
+    top          : 0; left: 20%; right: 20%;
+    height       : 2px;
+    background   : var(--accent);
+    border-radius: 0 0 2px 2px;
+  }
+  .mob-tab-icon  { font-size: 1.3rem; line-height: 1; }
+  .mob-tab-label { font-size: .58rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* Toggle horario: compactar en mobile */
+  #horario-selectores { gap: 8px; }
+  .time-picker-ctrl { width: 58px; }
+
+  /* v15.0: sin hover en táctil → ✕ de PostIt y acciones de nota siempre visibles */
+  .postit-del   { opacity: 1; }
+  .nota-accion  { opacity: 1; }
+  .footer-info  { display: none; }
+  .hdr-sync-label { display: none; }
+  #toast { white-space: normal; width: max-content; max-width: calc(100vw - 32px); text-align: center; bottom: 76px; }
+}
+/* ─────────────────────────────────────────────────
+   REGISTRADOR DE TAREAS — v12 (desktop only)
+───────────────────────────────────────────────── */
+#btn-registrador {
+  background   : transparent;
+  border       : 1px solid var(--border);
+  color        : var(--muted);
+  border-radius: var(--radius-sm);
+  padding      : 4px 8px;
+  font-size    : .85rem;
+  line-height  : 1;
+  cursor       : pointer;
+  transition   : all .15s;
+  display      : flex;
+  align-items  : center;
+  gap          : 4px;
+  font-family  : inherit;
+  flex-shrink  : 0;   /* fix a: no desaparece al redimensionar */
+}
+#btn-registrador:hover  { background: var(--tag-bg); color: var(--accent); border-color: var(--accent); }
+#btn-registrador.activo { color: #f97316; border-color: #f97316; background: #fff7ed; }
+#btn-registrador.tarea-corriendo {
+  color        : #f97316;
+  border-color : #f97316;
+  background   : #fff7ed;
+  animation    : pulse-btn-reg .9s ease infinite;
+}
+@keyframes pulse-btn-reg {
+  0%,100% { box-shadow: 0 0 0 0 rgba(249,115,22,.5); }
+  50%     { box-shadow: 0 0 0 5px rgba(249,115,22,0); }
+}
+
+#panel-registrador {
+  display      : none;
+  position     : fixed;
+  top          : calc(var(--header-h) + 56px);
+  left         : 20px;
+  width        : 256px;
+  background   : #fffaf5;
+  border       : 1.5px solid #fdba74;
+  border-top   : 3px solid #f97316;
+  border-radius: var(--radius);
+  box-shadow   : 0 12px 40px rgba(0,0,0,.22), 0 2px 10px rgba(249,115,22,.18);
+  z-index      : 500;
+  overflow     : hidden;
+  flex-direction: column;
+  transform    : translateY(-6px);
+  opacity      : 0;
+  transition   : opacity .18s ease, transform .18s ease;
+}
+#panel-registrador.visible {
+  display  : flex;
+  opacity  : 1;
+  transform: translateY(0);
+}
+/* Animación de entrada: necesita un frame para que la transición aplique */
+#panel-registrador.animating {
+  display  : flex;
+}
+
+.reg-header {
+  display        : flex;
+  align-items    : center;
+  gap            : 8px;
+  padding        : 11px 14px 9px;
+  border-bottom  : 1px solid var(--border);
+  background     : #fff7ed;
+  cursor         : grab;
+  user-select    : none;
+}
+.reg-header:active { cursor: grabbing; }
+.reg-title {
+  font-size     : .67rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color         : var(--muted);
+  flex          : 1;
+}
+.reg-close {
+  background: transparent;
+  border    : none;
+  color     : var(--muted);
+  font-size : .9rem;
+  cursor    : pointer;
+  padding   : 0 2px;
+  line-height: 1;
+}
+.reg-close:hover { color: var(--text); }
+
+.reg-section {
+  padding      : 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.reg-label {
+  font-size     : .62rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color         : var(--muted);
+  margin-bottom : 5px;
+}
+.reg-select {
+  width        : 100%;
+  padding      : 6px 8px;
+  font-size    : .78rem;
+  border       : 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background   : var(--surface);
+  color        : var(--text);
+  font-family  : inherit;
+  outline      : none;
+  transition   : border-color .15s;
+}
+.reg-select:focus { border-color: #f97316; }
+
+.btn-reg-iniciar {
+  width        : 100%;
+  padding      : 9px;
+  background   : #fff7ed;
+  color        : #9a3412;
+  border       : 1px solid #fdba74;
+  border-radius: var(--radius-sm);
+  font-size    : .8rem;
+  font-weight  : 600;
+  font-family  : inherit;
+  cursor       : pointer;
+  display      : flex;
+  align-items  : center;
+  justify-content: center;
+  gap          : 6px;
+  transition   : all .15s;
+}
+.btn-reg-iniciar:hover { background: #ffedd5; }
+.btn-reg-iniciar:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Estado activo del registrador */
+.reg-tarea-activa {
+  padding    : 8px 14px 4px;
+  font-size  : .72rem;
+  color      : var(--muted);
+  display    : flex;
+  align-items: center;
+  gap        : 6px;
+}
+.reg-dot {
+  width        : 7px;
+  height       : 7px;
+  border-radius: 50%;
+  background   : #f97316;
+  flex-shrink  : 0;
+  animation    : pulse-reg 1.2s ease infinite;
+}
+@keyframes pulse-reg { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.reg-cronometro {
+  text-align : center;
+  padding    : 6px 14px 2px;
+}
+.reg-tiempo {
+  font-family   : 'Bebas Neue', sans-serif;
+  font-size     : 2.2rem;
+  letter-spacing: 3px;
+  color         : var(--text);
+  line-height   : 1;
+}
+.reg-tiempo-label {
+  font-size  : .62rem;
+  color      : var(--muted);
+  margin-top : 2px;
+}
+.reg-progress-wrap {
+  padding: 8px 14px 4px;
+}
+.reg-progress-bar {
+  height       : 4px;
+  background   : var(--border);
+  border-radius: 99px;
+  overflow     : hidden;
+}
+.reg-progress-fill {
+  height          : 4px;
+  background      : #f97316;
+  border-radius   : 99px;
+  width           : 0%;
+  transition      : width .5s linear;
+}
+.reg-progress-fill.esperando {
+  width    : 100%;
+  animation: pulse-progress 1s ease infinite;
+}
+@keyframes pulse-progress { 0%,100%{opacity:1} 50%{opacity:.3} }
+.reg-tiempo.esperando {
+  color    : #f97316;
+  animation: pulse-tiempo 1s ease infinite;
+}
+@keyframes pulse-tiempo { 0%,100%{opacity:1} 50%{opacity:.4} }
+.reg-progress-meta {
+  display        : flex;
+  justify-content: space-between;
+  font-size      : .6rem;
+  color          : var(--muted);
+  margin-top     : 3px;
+}
+.reg-ciclo {
+  text-align : center;
+  font-size  : .67rem;
+  color      : var(--muted);
+  padding    : 2px 0 6px;
+}
+.reg-ciclo span { color: #f97316; font-weight: 600; }
+
+.reg-btns {
+  display : flex;
+  gap     : 8px;
+  padding : 10px 14px;
+}
+.btn-reg-cancelar {
+  flex         : 1;
+  padding      : 7px;
+  font-size    : .76rem;
+  border-radius: var(--radius-sm);
+  border       : 1px solid var(--border);
+  background   : var(--surface);
+  color        : var(--muted);
+  font-family  : inherit;
+  cursor       : pointer;
+  transition   : all .15s;
+}
+.btn-reg-cancelar:hover { background: #f8fafc; color: var(--text); }
+.btn-reg-finalizar {
+  flex         : 1;
+  padding      : 7px;
+  font-size    : .76rem;
+  font-weight  : 600;
+  border-radius: var(--radius-sm);
+  border       : 1px solid #fdba74;
+  background   : #fff7ed;
+  color        : #9a3412;
+  font-family  : inherit;
+  cursor       : pointer;
+  transition   : all .15s;
+}
+.btn-reg-finalizar:hover { background: #ffedd5; }
+
+/* Notificación de ciclo completado */
+#reg-notif {
+  display      : none;
+  position     : fixed;
+  top          : calc(var(--header-h) + 8px);
+  left         : 50%;
+  transform    : translateX(-50%);
+  background   : var(--accent2);
+  color        : #fff;
+  padding      : 12px 24px;
+  border-radius: var(--radius-sm);
+  font-size    : .82rem;
+  font-weight  : 500;
+  z-index      : 9998;
+  box-shadow   : var(--shadow-md);
+  text-align   : center;
+  white-space  : nowrap;
+}
+#reg-notif.visible { display: block; }
+
+/* Ocultar registrador en mobile */
+@media (max-width: 720px) {
+  #btn-registrador    { display: none; }
+  #panel-registrador  { display: none !important; }
+  #reg-notif          { display: none !important; }
+}
+
+/* ─────────────────────────────────────────────────
+   MARCAS — v12
+───────────────────────────────────────────────── */
+#marcas-wrap {
+  padding      : 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink  : 0;
+  background   : #fafafa;
+}
+.marcas-label {
+  font-size     : .67rem;
+  font-weight   : 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color         : var(--muted);
+  margin-bottom : 6px;
+}
+#marcas-list {
+  display  : flex;
+  flex-wrap: wrap;
+  gap      : 5px;
+  min-height: 24px;
+}
+.marca-chip {
+  padding      : 3px 10px;
+  border-radius: 99px;
+  font-size    : .72rem;
+  font-weight  : 500;
+  border       : 1.5px solid transparent;
+  cursor       : pointer;
+  transition   : all .15s;
+  user-select  : none;
+  opacity      : .45;
+  filter       : grayscale(40%);
+}
+.marca-chip:hover  { opacity: .7; filter: none; }
+.marca-chip.active {
+  opacity    : 1;
+  filter     : none;
+  font-weight: 700;
+  border-color: rgba(0,0,0,.3);
+  box-shadow : 0 0 0 2px rgba(0,0,0,.12);
+  transform  : scale(1.05);
+}
+.btn-marcas-limpiar {
+  padding      : 3px 8px;
+  border-radius: 99px;
+  font-size    : .68rem;
+  font-weight  : 500;
+  border       : 1px solid var(--border);
+  background   : transparent;
+  color        : var(--muted);
+  cursor       : pointer;
+  transition   : all .15s;
+  white-space  : nowrap;
+  display      : none;
+  align-items  : center;
+  gap          : 3px;
+  font-family  : inherit;
+}
+.btn-marcas-limpiar.visible { display: inline-flex; }
+.btn-marcas-limpiar:hover   { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+.marcas-empty-msg {
+  font-size : .7rem;
+  color     : var(--muted);
+  font-style: italic;
+}
+
+/* Pills de marca en panel HOY (renderizado desde HTML) */
+.nota-contenido .marca-pill {
+  display       : inline-flex;
+  align-items   : center;
+  padding       : 2px 10px;
+  border-radius : 99px;
+  font-size     : .7rem;
+  font-weight   : 600;
+  margin        : 0 3px 0 0;
+  letter-spacing: .02em;
+}
+.nota-contenido .marcas-wrap {
+  margin-top : 6px;
+  line-height: 2;
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-box">
+    <span class="login-emoji" id="login-emoji">🗂️</span>
+    <div class="login-logo" id="login-logo">MESA DE TRABAJO</div>
+    <div class="login-sub">v15.0 · Workspace personal</div>
+
+    <!-- v15.0: PASO 1 — email -->
+    <div class="login-paso" id="login-paso-email">
+      <label for="login-email">Email</label>
+      <input class="login-input" id="login-email" type="email" autocomplete="email">
+      <button class="login-btn" id="login-btn-enviar" type="button">Enviar código</button>
+      <div class="login-msg" id="login-msg-email"></div>
+    </div>
+
+    <!-- v15.0: PASO 2 — código -->
+    <div class="login-paso" id="login-paso-codigo" hidden>
+      <div class="login-enviado">Te mandamos un código a <b id="login-email-enviado"></b>. Revisá también Spam.</div>
+      <label for="login-codigo">Código</label>
+      <input class="login-input codigo" id="login-codigo" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
+      <button class="login-btn" id="login-btn-validar" type="button">Ingresar</button>
+      <button class="login-btn sec" id="login-btn-volver" type="button">Cambiar email</button>
+      <div class="login-msg" id="login-msg-codigo"></div>
+    </div>
+  </div>
+</div>
+
+<!-- DENIED SCREEN -->
+<div id="denied-screen">
+  <div class="denied-box">
+    <span class="denied-icon">🔒</span>
+    <div class="denied-title">Acceso no autorizado</div>
+    <div class="denied-msg">
+      Tu cuenta no tiene permiso para acceder a este workspace.<br>
+      Contactá al administrador.
+    </div>
+    <div class="denied-email" id="denied-email-display"></div>
+    <button class="btn-logout" onclick="cerrarSesion()">Cerrar sesión</button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="app-header">
+    <span id="hdr-emoji" style="font-size:1.3rem">🗂️</span>
+    <!-- hdr-logo y hdr-name se ocultan en mobile por CSS (mejora C) -->
+    <span class="hdr-logo" id="hdr-logo">MESA DE TRABAJO</span>
+    <span class="hdr-name" id="hdr-nombre"></span>
+    <span class="hdr-version">v15.0</span>
+    <span class="hdr-sep"></span>
+    <span class="hdr-refran" id="hdr-refran"></span>
+    <button class="btn-instalar-pwa" id="btn-instalar-pwa" title="Instalar app" style="display:none" onclick="instalarPWA()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Instalar
+    </button>
+    <span id="auth-status" title="Sesión activa"></span>
+    <button class="hdr-resumen-docx" id="btn-resumen-docx" onclick="abrirResumenModal()" title="Generar resumen en DOCX">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      Resumen
+    </button>
+    <button class="hdr-refresh" id="btn-refresh" onclick="cargarDatos(true)" title="Actualizar">
+      <svg id="refresh-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+      </svg>
+      Actualizar
+    </button>
+    <!-- v15.0: sincronización forzada con Google Calendar (llama al GAS de sync) -->
+    <button class="hdr-refresh" id="btn-sync" onclick="sincronizarCalendario()" title="Sincronizar con Google Calendar ahora">
+      <span id="sync-icon" style="font-size:.85rem;line-height:1">📅</span>
+      <span class="hdr-sync-label">Sincronizar</span>
+    </button>
+    <span class="hdr-user" id="hdr-avatar" title="Cerrar sesión" onclick="confirmarCerrarSesion()"></span>
+  </header>
+
+  <!-- MAIN -->
+  <div id="main">
+
+    <!-- PANEL IZQUIERDO: ANOTADOR -->
+    <div id="panel-left">
+      <div class="panel-header">
+        <span style="font-size:.9rem">✏️</span>
+        <span class="panel-title" id="anotador-titulo">Anotador</span>
+        <span class="chip-fecha" id="chip-fecha"></span>
+        <span style="flex:1"></span>
+        <button id="btn-registrador" onclick="toggleRegistrador()" title="Registrador de tareas">🍅</button>
+      </div>
+      <div id="etiquetas-wrap">
+        <div class="etiq-label">Etiqueta</div>
+        <div id="etiquetas-list"></div>
+      </div>
+
+      <!-- MARCAS — v12 -->
+      <div id="marcas-wrap">
+        <div class="marcas-label" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Marcas</span>
+          <button class="btn-marcas-limpiar" id="btn-marcas-limpiar" onclick="limpiarMarcasSeleccionadas()">✕ Limpiar</button>
+        </div>
+        <div id="marcas-list"><span class="marcas-empty-msg">Cargando marcas…</span></div>
+      </div>
+
+      <!-- TOGGLE HORARIO — v11 -->
+      <div id="horario-wrap">
+        <div class="horario-row">
+          <span class="horario-label">⏱ Registrar horario</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-horario" onchange="onToggleHorario()">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div id="horario-selectores">
+          <!-- Hora inicio -->
+          <div class="time-picker">
+            <div class="time-picker-label">Inicio</div>
+            <div class="time-picker-ctrl">
+              <button class="time-arrow" onclick="cambiarHora(1)" aria-label="Hora siguiente">▲</button>
+              <div class="time-value" id="picker-hora">09:00</div>
+              <button class="time-arrow" onclick="cambiarHora(-1)" aria-label="Hora anterior">▼</button>
+            </div>
+          </div>
+          <div class="time-sep">→</div>
+          <!-- Duración -->
+          <div class="time-picker">
+            <div class="time-picker-label">Duración</div>
+            <div class="time-picker-ctrl">
+              <button class="time-arrow" onclick="cambiarDuracion(1)" aria-label="Más duración">▲</button>
+              <div class="time-value" id="picker-duracion">1h</div>
+              <button class="time-arrow" onclick="cambiarDuracion(-1)" aria-label="Menos duración">▼</button>
+            </div>
+          </div>
+          <!-- Preview -->
+          <div class="horario-preview" id="horario-preview">09:00 a 10:00 (60 min)</div>
+        </div>
+      </div>
+
+      <!-- TOGGLE OTRA FECHA — v15.0 -->
+      <div id="fecha-wrap">
+        <div class="horario-row">
+          <span class="horario-label">📅 Otra fecha</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-fecha" onchange="onToggleFecha()">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div id="fecha-selector">
+          <input type="date" id="input-fecha" onchange="onCambioFecha()">
+          <span class="fecha-hint">Vuelve a hoy después de guardar</span>
+        </div>
+      </div>
+
+      <!-- BORRADOR LOCAL — v14.0 -->
+      <div id="draft-banner">
+        <span id="draft-banner-txt">📝 Borrador recuperado</span>
+        <div id="draft-banner-btns">
+          <button id="draft-banner-descartar" onclick="descartarDraft()" title="Descartar borrador y vaciar el anotador">🗑 Descartar</button>
+          <button id="draft-banner-cerrar" onclick="cerrarBannerDraft()" title="Cerrar aviso (el borrador se mantiene)">✕</button>
+        </div>
+      </div>
+
+      <div id="editor-wrap">
+        <div id="quill-host">
+          <div id="quill-editor"></div>
+        </div>
+      </div>
+      <div id="panel-left-footer">
+        <div class="footer-info">Etiqueta: <span id="etiq-seleccionada">—</span></div>
+        <div class="footer-botones">
+          <button class="btn-cancelar-edicion" id="btn-cancelar-edicion" onclick="cancelarEdicion()">Cancelar edición</button>
+          <button class="btn-guardar" id="btn-guardar" onclick="guardarNota()"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESIZER izquierdo -->
+    <div class="resizer" id="resizer-left"></div>
+
+    <!-- COLUMNA POSTITS -->
+    <div id="postit-col">
+      <div class="postit-col-header">
+        <span class="postit-col-title">📌 PostIts</span>
+        <button class="btn-add-postit" id="btn-add-postit" onclick="mostrarNuevoPostit()" title="Nuevo PostIt">+</button>
+      </div>
+      <div id="postit-list"></div>
+    </div>
+
+    <!-- RESIZER derecho -->
+    <div class="resizer" id="resizer-right"></div>
+
+    <!-- PANEL DERECHO: HOY -->
+    <div id="panel-right">
+      <div class="panel-right-header">
+        <button class="today-nav-btn" id="btn-fecha-ant" onclick="navegarFecha(-1)" title="Día anterior" disabled>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="today-nav-center">
+          <span class="today-label" id="today-label-txt">HOY</span>
+          <span class="today-date"  id="fecha-hoy"></span>
+        </div>
+        <button class="today-nav-btn" id="btn-fecha-sig" onclick="navegarFecha(+1)" title="Día siguiente" disabled>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <!-- v15.0: Papelera -->
+        <button class="today-nav-btn btn-papelera" id="btn-papelera" onclick="abrirPapelera()" title="Papelera de notas">🗑</button>
+      </div>
+      <div id="refran-box">…</div>
+      <div id="notas-list">
+        <div class="notas-empty">
+          <span class="notas-empty-icon">📋</span>
+          Cargando notas de hoy…
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /#main -->
+
+  <!-- TOOLBAR (desktop) -->
+  <div id="toolbar"></div>
+
+  <!-- MOBILE TAB BAR — v10.1 + badge HOY v11 -->
+  <nav id="mobile-tabs" role="navigation" aria-label="Navegación mobile">
+    <button class="mob-tab active" id="tab-anotar" onclick="cambiarTab('anotar')" aria-label="Anotador">
+      <span class="mob-tab-icon">✏️</span>
+      <span class="mob-tab-label">Anotar</span>
+    </button>
+    <button class="mob-tab" id="tab-postits" onclick="cambiarTab('postits')" aria-label="PostIts">
+      <span class="mob-tab-icon">📌</span>
+      <span class="mob-tab-label">PostIts</span>
+    </button>
+    <button class="mob-tab" id="tab-hoy" onclick="cambiarTab('hoy')" aria-label="HOY">
+      <span class="mob-tab-icon-wrap">
+        <span class="mob-tab-icon">📋</span>
+        <span class="mob-tab-badge" id="badge-hoy"></span>
+      </span>
+      <span class="mob-tab-label">HOY</span>
+    </button>
+  </nav>
+
+</div><!-- /#app -->
+
+<!-- FAB nuevo PostIt (mobile) — v11 -->
+<button id="fab-nuevo-postit" onclick="abrirBottomSheet()" aria-label="Nuevo PostIt">+</button>
+
+<!-- Overlay bottom sheet -->
+<div id="bs-overlay" onclick="cerrarBottomSheet()"></div>
+
+<!-- Bottom Sheet nuevo PostIt (mobile) — v11 -->
+<div id="postit-bottom-sheet" role="dialog" aria-label="Nuevo PostIt">
+  <div class="bs-handle"></div>
+  <div class="bs-title">Nuevo PostIt</div>
+  <div class="bs-colors" id="bs-colors"></div>
+  <textarea id="bs-textarea" placeholder="Escribí el recordatorio…" rows="3"></textarea>
+  <div class="bs-actions">
+    <button id="bs-btn-cancel" onclick="cerrarBottomSheet()">Cancelar</button>
+    <button id="bs-btn-ok" onclick="confirmarBottomSheet()">Agregar PostIt</button>
+  </div>
+</div>
+
+<!-- REGISTRADOR DE TAREAS — v12 (desktop only) -->
+<div id="panel-registrador" role="dialog" aria-label="Registrador de tareas">
+  <!-- Estado: reposo -->
+  <div id="reg-estado-reposo">
+    <div class="reg-header">
+      <span style="font-size:.9rem">🍅</span>
+      <span class="reg-title">Registrador</span>
+      <button class="reg-close" onclick="toggleRegistrador()" title="Cerrar">✕</button>
+    </div>
+    <div class="reg-section">
+      <div class="reg-label">Etiqueta</div>
+      <select class="reg-select" id="reg-select-etiqueta"></select>
+    </div>
+    <div class="reg-section">
+      <div class="reg-label">Tarea</div>
+      <select class="reg-select" id="reg-select-tarea">
+        <option value="">— seleccioná una tarea —</option>
+      </select>
+    </div>
+    <div class="reg-section" style="border-bottom:none">
+      <button class="btn-reg-iniciar" id="btn-reg-iniciar" onclick="iniciarTarea()">
+        ▶ Iniciar tarea
+      </button>
+    </div>
+  </div>
+  <!-- Estado: activo -->
+  <div id="reg-estado-activo" style="display:none">
+    <div class="reg-header">
+      <span style="font-size:.9rem">🍅</span>
+      <span class="reg-title">En curso</span>
+      <button class="reg-close" onclick="toggleRegistrador()" title="Cerrar">✕</button>
+    </div>
+    <div class="reg-tarea-activa">
+      <div class="reg-dot"></div>
+      <span id="reg-tarea-nombre" style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    </div>
+    <div class="reg-cronometro">
+      <div class="reg-tiempo" id="reg-tiempo">00:00</div>
+      <div class="reg-tiempo-label">transcurrido en este ciclo</div>
+    </div>
+    <div class="reg-progress-wrap">
+      <div class="reg-progress-bar">
+        <div class="reg-progress-fill" id="reg-progress-fill"></div>
+      </div>
+      <div class="reg-progress-meta">
+        <span>0 min</span><span>25 min</span>
+      </div>
+    </div>
+    <div class="reg-ciclo">Ciclo <span id="reg-ciclo-num">1</span> de 25 min</div>
+    <div class="reg-btns">
+      <button class="btn-reg-cancelar" onclick="cancelarTarea()">Cancelar</button>
+      <button class="btn-reg-finalizar" onclick="finalizarTarea()">✓ Finalizar</button>
+    </div>
+  </div>
+</div>
+
+<!-- v13.0: Modal Resumen DOCX (desktop only) -->
+<div id="resumen-overlay" onclick="if(event.target===this) cerrarResumenModal()">
+  <div id="resumen-modal" role="dialog" aria-label="Resumen DOCX de Notas">
+    <div class="rm-title">📄 Resumen DOCX</div>
+    <div class="rm-sub">Generá un documento Word con las notas del período y filtro elegidos.</div>
+
+    <label>Rango de fechas (vacío = todo)</label>
+    <div class="rm-fechas">
+      <input type="date" id="rm-fecha-desde">
+      <input type="date" id="rm-fecha-hasta">
+    </div>
+
+    <label>Filtro de texto</label>
+    <input type="text" id="rm-filtro" placeholder="ej: 1316 costos indirectos">
+    <div class="rm-hint">Busca notas que contengan TODAS las palabras (AND), sin importar mayúsculas.</div>
+
+    <div class="rm-status" id="rm-status"></div>
+
+    <div class="rm-actions">
+      <button class="rm-btn-cancel" onclick="cerrarResumenModal()">Cancelar</button>
+      <button class="rm-btn-generar" id="rm-btn-generar" onclick="generarResumenDocx()">Generar DOCX</button>
+    </div>
+  </div>
+</div>
+
+<!-- Notificación ciclo completado -->
+<div id="reg-notif">🍅 ¿Terminaste la tarea? — <button onclick="finalizarTarea()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:.78rem;cursor:pointer;font-family:inherit;margin-left:8px;">Finalizar</button> <button onclick="continuarTarea()" style="background:transparent;color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:.78rem;cursor:pointer;font-family:inherit;margin-left:4px;">Continuar</button></div>
+
+<!-- v15.0: Papelera de notas -->
+<div id="papelera-overlay" onclick="if(event.target===this) cerrarPapelera()">
+  <div id="papelera-modal" role="dialog" aria-label="Papelera de notas">
+    <div class="pap-header">
+      <span>🗑</span><span class="pap-title">Papelera</span>
+      <button class="pap-close" onclick="cerrarPapelera()" title="Cerrar">✕</button>
+    </div>
+    <div class="pap-sub">Notas borradas, de la más reciente a la más vieja. Al restaurar vuelven a su día y al calendario.</div>
+    <div id="papelera-lista"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- ══════════════════════════════════════════════
+     JAVASCRIPT  v11
+══════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ──────────────────────────────────────────────
+   CONFIGURACIÓN
+────────────────────────────────────────────── */
+const VERSION_UI    = 'v15.0';
+// v15.0: Supabase — proyecto PWAgoe (mismos datos que prekom_auth_test_v0_1_0)
+const SUPABASE_URL  = 'https://uhuftsxrzwhmvzygcuvp.supabase.co';
+const SUPABASE_KEY  = 'sb_publishable_TCibRAnzgaDIbn_MIirw6w_FltKG8X3';
+const EMAIL_SUGERIDO = 'alejandro.perin@gmail.com';
+// v15.0: Web App del GAS de sync (mdt_sync_gas_v1_0.gs). Pegar acá la URL /exec
+// después de implementarlo (ver handoff). Vacía = el botón 📅 avisa que falta.
+const SYNC_GAS_URL  = 'https://script.google.com/macros/s/AKfycbx64XDbLHrJYsIHnT4DYIX-rmWVDidFvXcDXwongehkI24C-gqOnGT9z2jRma9HXvQ/exec';
+
+// Cliente Supabase con sesión propia de MdT: todas las PWA viven en goeapp.github.io
+// (mismo localStorage), así MdT no comparte ni pisa la sesión de otra PWA.
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, storageKey: 'mdt-sb-auth' }
+});
+
+const COLS_NOTA = 'id, fecha, fecha_hora, etiqueta, contenido, contenido_editor, hora_inicio, duracion_min, marcas, importada, editada_en';
+
+/* ──────────────────────────────────────────────
+   COLORES POSTITS
+────────────────────────────────────────────── */
+const POSTIT_COLORS = [
+  { id: 'yellow',   bg: '#fef08a', label: 'Amarillo' },
+  { id: 'green',    bg: '#bbf7d0', label: 'Verde'    },
+  { id: 'blue',     bg: '#bae6fd', label: 'Celeste'  },
+  { id: 'pink',     bg: '#fbcfe8', label: 'Rosa'     },
+  { id: 'lavender', bg: '#ddd6fe', label: 'Lavanda'  },
+  { id: 'peach',    bg: '#fed7aa', label: 'Durazno'  },
+];
+
+/* ──────────────────────────────────────────────
+   OPCIONES DE DURACIÓN — v11
+────────────────────────────────────────────── */
+// v12.5 — pasos de 15 min, formato 0:15 → 4:00
+const DURACION_OPTS = (() => {
+  const opts = [];
+  for (let m = 15; m <= 240; m += 15) {
+    const h    = Math.floor(m / 60);
+    const rest = m % 60;
+    const label = h > 0
+      ? `${h}:${String(rest).padStart(2,'0')}`
+      : `0:${String(rest).padStart(2,'0')}`;
+    opts.push({ label, min: m });  // min = total de minutos
+  }
+  return opts;
+})();
+
+/* ──────────────────────────────────────────────
+   ESTADO GLOBAL
+────────────────────────────────────────────── */
+const estado = {
+  usuario          : null,
+  etiqActiva       : null,
+  quill            : null,
+  refrescoId       : null,
+  datos            : null,
+  postits          : [],
+  nuevoPostitColor : 'yellow',
+  bsColor          : 'yellow',
+  fechaVista       : null,
+  fechasConNotas   : [],
+  // v11 — toggle horario
+  horarioActivo    : false,
+  horaIdx          : 0,
+  duracionIdx      : 3,    // v12.5: índice 3 = 1:00 (pasos de 15 min)
+  // v12 — semáforo de sincronización
+  guardando        : false,
+  // v15.0 — modo edición, toggle de fecha, notas en pantalla
+  editando         : null,     // null | { id, hora, fecha, fechaHora } de la nota en edición
+  fechaActiva      : false,    // toggle "Otra fecha"
+  fechaElegida     : null,     // 'yyyy-mm-dd'
+  notasVista       : [],       // notas del día que se está mostrando (para ✏️)
+  syncEnCurso      : false,
+  // v12 — marcas seleccionadas
+  marcasActivas    : [],       // array de { nombre, color }
+  marcasDisponibles: [],       // todas las marcas (mdt_marcas)
+  // v12 — registrador de tareas
+  reg: {
+    activo      : false,
+    etiqueta    : '',
+    tarea       : '',
+    horaInicio  : null,       // Date del momento de inicio (tarea completa)
+    cicloInicioMs : 0,        // v14.0: timestamp (Date.now()) de inicio del ciclo actual
+    segSegundos : 0,          // segundos transcurridos en el ciclo actual (derivado, solo display)
+    cicloNum    : 1,          // número de ciclo 25-min actual
+    timerId     : null,       // setInterval del cronómetro
+    tareas      : [],         // lista completa de tareas del Sheet
+    audioCtx    : null,       // v12.5: AudioContext persistente (evita bloqueo)
+    alarmaTimeouts: [],       // v14.1: timeoutId de las tandas de beeps de la alarma extendida
+    autoContinuarId: null,    // v14.1: timeoutId del auto-continuar a 1 min sin respuesta
+  }
+};
+
+/* ──────────────────────────────────────────────
+   BORRADOR LOCAL DEL ANOTADOR — v14.0
+   Autoguarda en localStorage lo que estás escribiendo (texto+etiqueta+
+   marcas+horario) para no perderlo si se cierra el navegador sin guardar
+   la nota. Se restaura al recargar si tiene menos de DRAFT_MAX_AGE_MS.
+────────────────────────────────────────────── */
+const DRAFT_KEY          = 'mdt_draft_v1';
+const DRAFT_MAX_AGE_MS   = 48 * 60 * 60 * 1000;  // 48hs
+let   draftDebounceId    = null;
+let   draftYaRestaurado  = false;  // solo intentamos restaurar una vez por sesión
+
+function guardarDraftLocal() {
+  if (!estado.quill) return;
+  try {
+    const textoPlano = estado.quill.getText().trim();
+    // Sin texto y sin marcas/horario tocado: no vale la pena guardar un draft vacío
+    if (!textoPlano && estado.marcasActivas.length === 0 && !estado.horarioActivo && !estado.editando && !estado.fechaActiva) {
+      limpiarDraftLocal();
+      return;
+    }
+    const draft = {
+      html         : estado.quill.getSemanticHTML(),
+      etiqueta     : estado.etiqActiva || null,
+      marcas       : estado.marcasActivas,
+      horarioActivo: estado.horarioActivo,
+      horaIdx      : estado.horaIdx,
+      duracionIdx  : estado.duracionIdx,
+      editando     : estado.editando,      // v15.0: si es una edición, a qué nota pertenece
+      fechaActiva  : estado.fechaActiva,   // v15.0
+      fechaElegida : estado.fechaElegida,  // v15.0
+      ts           : Date.now(),
+    };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch(e) {
+    console.warn('No se pudo guardar el borrador local:', e);
+  }
+}
+
+function programarGuardadoDraft() {
+  clearTimeout(draftDebounceId);
+  draftDebounceId = setTimeout(guardarDraftLocal, 800);
+}
+
+function limpiarDraftLocal() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+  const banner = document.getElementById('draft-banner');
+  if (banner) banner.classList.remove('visible');
+}
+
+function restaurarDraftLocal() {
+  if (draftYaRestaurado) return;
+  draftYaRestaurado = true;
+  let draft;
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return;
+    draft = JSON.parse(raw);
+  } catch(e) { return; }
+  if (!draft || !draft.ts || (Date.now() - draft.ts) > DRAFT_MAX_AGE_MS) {
+    limpiarDraftLocal();
+    return;
+  }
+  if (!estado.quill) return;
+
+  // Contenido de la nota
+  if (draft.html) {
+    estado.quill.clipboard.dangerouslyPasteHTML(draft.html);
+  }
+
+  // Etiqueta
+  if (draft.etiqueta) {
+    const chip = Array.from(document.querySelectorAll('.etiq-chip'))
+      .find(c => c.textContent === draft.etiqueta);
+    if (chip) seleccionarEtiqueta(draft.etiqueta, chip);
+  }
+
+  // Marcas
+  if (Array.isArray(draft.marcas) && draft.marcas.length) {
+    estado.marcasActivas = draft.marcas;
+    document.querySelectorAll('.marca-chip').forEach(chip => {
+      if (draft.marcas.some(m => m.nombre === chip.dataset.nombre)) {
+        chip.classList.add('active');
+      }
+    });
+    actualizarBtnLimpiarMarcas();
+  }
+
+  // Horario
+  if (draft.horarioActivo) {
+    estado.horarioActivo = true;
+    estado.horaIdx     = draft.horaIdx     ?? estado.horaIdx;
+    estado.duracionIdx  = draft.duracionIdx ?? estado.duracionIdx;
+    const toggleEl = document.getElementById('toggle-horario');
+    if (toggleEl) toggleEl.checked = true;
+    actualizarPickerDisplay();
+    document.getElementById('horario-selectores')?.classList.add('visible');
+  }
+
+  // v15.0: fecha elegida (solo si sigue siendo válida: no futura)
+  if (draft.fechaActiva && draft.fechaElegida && draft.fechaElegida <= fechaHoyStr()) {
+    activarFecha(draft.fechaElegida);
+  }
+
+  // v15.0: si el borrador era una edición, volver al modo edición de esa nota
+  if (draft.editando && draft.editando.id) {
+    entrarModoEdicionUI(draft.editando);
+  }
+
+  // Aviso
+  const banner = document.getElementById('draft-banner');
+  const txt    = document.getElementById('draft-banner-txt');
+  if (banner && txt) {
+    const fecha = new Date(draft.ts);
+    const hh = String(fecha.getHours()).padStart(2,'0');
+    const mm = String(fecha.getMinutes()).padStart(2,'0');
+    txt.textContent = draft.editando
+      ? `📝 Edición recuperada de las ${hh}:${mm}`
+      : `📝 Borrador recuperado de las ${hh}:${mm}`;
+    banner.classList.add('visible');
+  }
+  actualizarEstadoEditar();
+  mostrarToast(draft.editando ? '📝 Se recuperó una edición que no habías guardado' : '📝 Se recuperó un borrador que no habías guardado');
+}
+
+function cerrarBannerDraft() {
+  // v14.1: cierra únicamente el banner visual — el borrador sigue en localStorage
+  // y el texto restaurado en el editor no se toca. Se diferencia de descartarDraft(),
+  // que vacía todo. El draft se seguirá actualizando con el autoguardado normal y
+  // se borrará solo como siempre: al guardar la nota o al finalizar una tarea.
+  const banner = document.getElementById('draft-banner');
+  if (banner) banner.classList.remove('visible');
+}
+
+function descartarDraft() {
+  resetAnotador();   // v15.0: incluye salir del modo edición y apagar "Otra fecha"
+  mostrarToast('🗑 Borrador descartado');
+}
+
+/* ──────────────────────────────────────────────
+   v15.0 — ANOTADOR: reset, toggle de fecha y modo edición
+────────────────────────────────────────────── */
+// Deja el Anotador como recién abierto: vacío, sin marcas, horario y fecha
+// apagados, fuera del modo edición y sin borrador local.
+function resetAnotador() {
+  if (estado.quill) estado.quill.setContents([]);
+  limpiarMarcasSeleccionadas();
+  apagarHorario();
+  desactivarFecha();
+  salirModoEdicionUI();
+  limpiarDraftLocal();
+  actualizarEstadoEditar();
+}
+
+function apagarHorario() {
+  estado.horarioActivo = false;
+  const toggleEl = document.getElementById('toggle-horario');
+  if (toggleEl) toggleEl.checked = false;
+  document.getElementById('horario-selectores')?.classList.remove('visible');
+}
+
+// ── Toggle "Otra fecha" ─────────────────────────
+function onToggleFecha() {
+  const t = document.getElementById('toggle-fecha');
+  if (t.checked) {
+    activarFecha(fechaHoyStr());   // arranca en hoy; se elige el día en el selector
+  } else {
+    desactivarFecha();
+  }
+  programarGuardadoDraft();
+}
+
+function activarFecha(fechaStr) {
+  const input = document.getElementById('input-fecha');
+  estado.fechaActiva  = true;
+  estado.fechaElegida = fechaStr;
+  document.getElementById('toggle-fecha').checked = true;
+  input.max   = fechaHoyStr();
+  input.value = fechaStr;
+  document.getElementById('fecha-selector').classList.add('visible');
+  actualizarChipFecha();
+}
+
+function desactivarFecha() {
+  estado.fechaActiva  = false;
+  estado.fechaElegida = null;
+  const t = document.getElementById('toggle-fecha');
+  if (t) t.checked = false;
+  document.getElementById('fecha-selector')?.classList.remove('visible');
+  actualizarChipFecha();
+}
+
+function onCambioFecha() {
+  const input = document.getElementById('input-fecha');
+  const hoy   = fechaHoyStr();
+  let v = input.value;
+  if (!v) { v = estado.fechaElegida || hoy; }
+  if (v > hoy) {                       // no se permiten fechas futuras
+    mostrarToast('⚠ No se puede anotar en una fecha futura');
+    v = hoy;
+  }
+  input.value = v;
+  estado.fechaElegida = v;
+  actualizarChipFecha();
+  programarGuardadoDraft();
+}
+
+// Chip azul en el encabezado del Anotador cuando la fecha no es hoy
+function actualizarChipFecha() {
+  const chip = document.getElementById('chip-fecha');
+  if (!chip) return;
+  const f = fechaDestino();
+  if (f !== fechaHoyStr()) {
+    const [y, m, d] = f.split('-').map(Number);
+    const MES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    chip.textContent = `📅 ${String(d).padStart(2,'0')}-${MES[m - 1]}${y !== new Date().getFullYear() ? '-' + y : ''}`;
+    chip.classList.add('visible');
+  } else {
+    chip.classList.remove('visible');
+  }
+}
+
+// Fecha en la que se va a guardar la nota
+function fechaDestino() {
+  return (estado.fechaActiva && estado.fechaElegida) ? estado.fechaElegida : fechaHoyStr();
+}
+
+// ── Modo edición ────────────────────────────────
+// ¿El Anotador tiene algo escrito? (criterio de "texto sin guardar")
+function anotadorConTexto() {
+  return !!(estado.quill && estado.quill.getText().trim());
+}
+
+// ✏️ desactivados si el Anotador tiene texto (opción B acordada) o si hay edición en curso
+function actualizarEstadoEditar() {
+  const bloqueado = anotadorConTexto() || !!estado.editando;
+  const tip = estado.editando ? 'Guardá o cancelá la edición en curso' : 'Guardá o vaciá el Anotador para editar';
+  document.querySelectorAll('.nota-accion.editar').forEach(b => {
+    b.disabled = bloqueado;
+    b.title    = bloqueado ? tip : 'Editar nota';
+  });
+}
+
+function entrarModoEdicionUI(ed) {
+  estado.editando = ed;
+  document.getElementById('panel-left').classList.add('modo-edicion');
+  document.getElementById('anotador-titulo').textContent = `Editando nota de las ${ed.hora}`;
+  renderBotonGuardar();
+  document.querySelectorAll('.nota-card').forEach(c => c.classList.toggle('en-edicion', c.dataset.id === ed.id));
+}
+
+function salirModoEdicionUI() {
+  estado.editando = null;
+  document.getElementById('panel-left')?.classList.remove('modo-edicion');
+  const t = document.getElementById('anotador-titulo');
+  if (t) t.textContent = 'Anotador';
+  renderBotonGuardar();
+  document.querySelectorAll('.nota-card.en-edicion').forEach(c => c.classList.remove('en-edicion'));
+}
+
+const SVG_GUARDAR = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+  <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
+
+function renderBotonGuardar() {
+  const btn = document.getElementById('btn-guardar');
+  if (btn) btn.innerHTML = `${SVG_GUARDAR} ${estado.editando ? 'Guardar cambios' : 'Guardar nota'}`;
+}
+
+// ✏️ en una tarjeta del panel HOY → cargar la nota en el Anotador
+function editarNota(id) {
+  if (anotadorConTexto() || estado.editando) return;   // B: no se pisa nada
+  const nota = estado.notasVista.find(n => n.id === id);
+  if (!nota || nota.importada) return;
+
+  // Contenido crudo del editor (sin la línea de horario ni las pills)
+  estado.quill.setContents([]);
+  estado.quill.clipboard.dangerouslyPasteHTML(nota.contenido_editor || '');
+
+  // Etiqueta
+  const chip = Array.from(document.querySelectorAll('.etiq-chip')).find(c => c.textContent === nota.etiqueta);
+  if (chip) seleccionarEtiqueta(nota.etiqueta, chip);
+
+  // Marcas
+  limpiarMarcasSeleccionadas();
+  (Array.isArray(nota.marcas) ? nota.marcas : []).forEach(m => {
+    const c = document.querySelector(`.marca-chip[data-nombre="${CSS.escape(m.nombre)}"]`);
+    estado.marcasActivas.push({ nombre: m.nombre, color: c ? c.dataset.color : m.color });
+    if (c) c.classList.add('active');
+  });
+  actualizarBtnLimpiarMarcas();
+
+  // Horario
+  if (nota.hora_inicio && nota.duracion_min) {
+    estado.horarioActivo = true;
+    document.getElementById('toggle-horario').checked = true;
+    const [hh, mm] = nota.hora_inicio.split(':').map(Number);
+    estado.horaIdx = Math.floor((hh * 60 + mm) / 15) % HORA_SLOTS.length;
+    let durIdx = 0, menor = Infinity;
+    DURACION_OPTS.forEach((o, i) => { const d = Math.abs(o.min - nota.duracion_min); if (d < menor) { menor = d; durIdx = i; } });
+    estado.duracionIdx = durIdx;
+    actualizarPickerDisplay();
+    document.getElementById('horario-selectores').classList.add('visible');
+  } else {
+    apagarHorario();
+  }
+
+  // Fecha: el toggle arranca encendido con la fecha de la nota
+  activarFecha(nota.fecha);
+
+  entrarModoEdicionUI({
+    id: nota.id,
+    hora: formatearHora(nota.fecha_hora),
+    fecha: nota.fecha,
+    fechaHora: nota.fecha_hora,
+  });
+  guardarDraftLocal();
+  actualizarEstadoEditar();
+  if (esMobile()) cambiarTab('anotar');
+  setTimeout(() => estado.quill.focus(), 50);
+}
+
+function cancelarEdicion() {
+  resetAnotador();
+  mostrarToast('Edición cancelada — la nota quedó como estaba');
+}
+
+/* ──────────────────────────────────────────────
+   HORARIOS — generar array de segmentos de 30 min
+────────────────────────────────────────────── */
+// v12.5 — pasos de 15 min (00:00 → 23:45)
+const HORA_SLOTS = (() => {
+  const slots = [];
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      slots.push(
+        String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0')
+      );
+    }
+  }
+  return slots;
+})();
+
+function horaSlotMasCercana() {
+  const ahora = new Date();
+  const totalMin = ahora.getHours() * 60 + ahora.getMinutes();
+  // Redondear al próximo segmento de 15 min
+  const idx = Math.ceil(totalMin / 15) % HORA_SLOTS.length;
+  return idx;
+}
+
+function calcularHoraFin(horaStr, durMin) {
+  const [hh, mm] = horaStr.split(':').map(Number);
+  const total = hh * 60 + mm + durMin;
+  return String(Math.floor(total / 60) % 24).padStart(2,'0') + ':' + String(total % 60).padStart(2,'0');
+}
+
+function actualizarPickerDisplay() {
+  const horaStr = HORA_SLOTS[estado.horaIdx];
+  const dur     = DURACION_OPTS[estado.duracionIdx];
+  const horaFin = calcularHoraFin(horaStr, dur.min);
+
+  document.getElementById('picker-hora').textContent     = horaStr;
+  document.getElementById('picker-duracion').textContent = dur.label;
+  document.getElementById('horario-preview').textContent =
+    `${horaStr} a ${horaFin} (${dur.min} min)`;
+}
+
+function cambiarHora(dir) {
+  estado.horaIdx = (estado.horaIdx + dir + HORA_SLOTS.length) % HORA_SLOTS.length;
+  actualizarPickerDisplay();
+  programarGuardadoDraft();  // v14.0
+}
+
+function cambiarDuracion(dir) {
+  estado.duracionIdx = Math.max(0, Math.min(DURACION_OPTS.length - 1, estado.duracionIdx + dir));
+  actualizarPickerDisplay();
+  programarGuardadoDraft();  // v14.0
+}
+
+function onToggleHorario() {
+  const toggle = document.getElementById('toggle-horario');
+  const selectores = document.getElementById('horario-selectores');
+  estado.horarioActivo = toggle.checked;
+
+  if (toggle.checked) {
+    // Inicializar al slot más cercano
+    estado.horaIdx = horaSlotMasCercana();
+    actualizarPickerDisplay();
+    selectores.classList.add('visible');
+  } else {
+    selectores.classList.remove('visible');
+  }
+  programarGuardadoDraft();  // v14.0
+}
+
+/* ──────────────────────────────────────────────
+   MARCAS — v12
+────────────────────────────────────────────── */
+
+// Mapa de colores en inglés a valores CSS
+const MARCA_COLORS = {
+  red    : { bg: '#fee2e2', fg: '#991b1b', border: '#fca5a5' },
+  orange : { bg: '#ffedd5', fg: '#9a3412', border: '#fdba74' },
+  yellow : { bg: '#fef9c3', fg: '#854d0e', border: '#fde047' },
+  green  : { bg: '#dcfce7', fg: '#166534', border: '#86efac' },
+  blue   : { bg: '#dbeafe', fg: '#1e40af', border: '#93c5fd' },
+  indigo : { bg: '#e0e7ff', fg: '#3730a3', border: '#a5b4fc' },
+  purple : { bg: '#f3e8ff', fg: '#6b21a8', border: '#d8b4fe' },
+  pink   : { bg: '#fce7f3', fg: '#9d174d', border: '#f9a8d4' },
+  teal   : { bg: '#ccfbf1', fg: '#134e4a', border: '#5eead4' },
+  gray   : { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1' },
+};
+
+function renderMarcas(marcas) {
+  const lista = document.getElementById('marcas-list');
+  if (!lista) return;
+  estado.marcasDisponibles = marcas || [];
+  lista.innerHTML = '';
+
+  if (!marcas || marcas.length === 0) {
+    lista.innerHTML = '<span class="marcas-empty-msg">Sin marcas configuradas. Agregalas en Supabase (tabla mdt_marcas).</span>';
+    return;
+  }
+
+  marcas.forEach(m => {
+    const c = MARCA_COLORS[m.color] || MARCA_COLORS['gray'];
+    const chip = document.createElement('button');
+    chip.className = 'marca-chip';
+    chip.textContent = m.nombre;
+    chip.dataset.nombre = m.nombre;
+    chip.dataset.color  = m.color;
+    chip.style.background = c.bg;
+    chip.style.color      = c.fg;
+    chip.style.borderColor = c.border;
+    chip.onclick = () => toggleMarca(m, chip);
+    // v14.0 fix: reaplicar 'active' si esta marca ya estaba seleccionada
+    // (antes, Actualizar reconstruía los chips y perdían la clase visualmente,
+    // aunque estado.marcasActivas seguía correcto por debajo — confuso igual)
+    if (estado.marcasActivas.some(ma => ma.nombre === m.nombre)) {
+      chip.classList.add('active');
+    }
+    lista.appendChild(chip);
+  });
+}
+
+function toggleMarca(marca, chip) {
+  const idx = estado.marcasActivas.findIndex(m => m.nombre === marca.nombre);
+  if (idx === -1) {
+    estado.marcasActivas.push(marca);
+    chip.classList.add('active');
+  } else {
+    estado.marcasActivas.splice(idx, 1);
+    chip.classList.remove('active');
+  }
+  actualizarBtnLimpiarMarcas();
+  programarGuardadoDraft();  // v14.0
+}
+
+function actualizarBtnLimpiarMarcas() {
+  const btn = document.getElementById('btn-marcas-limpiar');
+  if (btn) btn.classList.toggle('visible', estado.marcasActivas.length > 0);
+}
+
+function limpiarMarcasSeleccionadas() {
+  estado.marcasActivas = [];
+  document.querySelectorAll('.marca-chip').forEach(c => c.classList.remove('active'));
+  actualizarBtnLimpiarMarcas();
+}
+
+/* ──────────────────────────────────────────────
+   REGISTRADOR DE TAREAS — v12 (desktop only)
+────────────────────────────────────────────── */
+
+const REG_CICLO_SEG = 25 * 60;  // v15.0: fijo en 25 min (se quitó el slider del panel Métricas)
+
+// v14.0: al volver a la pestaña (visibilitychange), recalcular el ciclo de inmediato.
+// Antes, si dejabas la pestaña oculta/minimizada, el setInterval throttleado del
+// navegador podía tardar mucho en volver a disparar — con esto no esperás al próximo
+// tick salteado para enterarte de que el ciclo ya venció. También reintenta resume()
+// del AudioContext, que algunos navegadores suspenden tras inactividad prolongada.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (estado.reg.activo && estado.reg.timerId) {
+    tickRegistrador();
+  }
+  if (estado.reg.audioCtx && estado.reg.audioCtx.state === 'suspended') {
+    estado.reg.audioCtx.resume().catch(() => {});
+  }
+});
+
+function toggleRegistrador() {
+  const panel = document.getElementById('panel-registrador');
+  if (!panel) return;
+  const btn = document.getElementById('btn-registrador');
+
+  if (panel.classList.contains('visible')) {
+    panel.style.opacity   = '0';
+    panel.style.transform = 'translateY(-6px)';
+    setTimeout(() => {
+      panel.classList.remove('visible');
+      panel.style.opacity   = '';
+      panel.style.transform = '';
+    }, 180);
+    if (btn) {
+      btn.classList.remove('activo');
+      if (estado.reg.activo) btn.classList.add('tarea-corriendo');
+    }
+  } else {
+    panel.classList.add('animating');
+    panel.style.opacity   = '0';
+    panel.style.transform = 'translateY(-6px)';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      panel.classList.add('visible');
+      panel.classList.remove('animating');
+      panel.style.opacity   = '';
+      panel.style.transform = '';
+    }));
+    if (btn) { btn.classList.add('activo'); btn.classList.remove('tarea-corriendo'); }
+  }
+}
+
+// ── Drag del panel registrador (fix d) ────────────────────────
+(function() {
+  let dragEl = null, dragOffX = 0, dragOffY = 0;
+
+  document.addEventListener('mousedown', e => {
+    const header = e.target.closest('.reg-header');
+    if (!header) return;
+    dragEl = document.getElementById('panel-registrador');
+    if (!dragEl) return;
+    const rect = dragEl.getBoundingClientRect();
+    dragOffX = e.clientX - rect.left;
+    dragOffY = e.clientY - rect.top;
+    dragEl.style.transition = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragEl) return;
+    const x = Math.max(0, Math.min(window.innerWidth  - dragEl.offsetWidth,  e.clientX - dragOffX));
+    const y = Math.max(0, Math.min(window.innerHeight - dragEl.offsetHeight, e.clientY - dragOffY));
+    dragEl.style.left = x + 'px';
+    dragEl.style.top  = y + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (dragEl) { dragEl.style.transition = ''; dragEl = null; }
+  });
+})();
+
+function renderTareasEnRegistrador(tareas) {
+  estado.reg.tareas = tareas || [];
+  const sel = document.getElementById('reg-select-tarea');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— seleccioná una tarea —</option>';
+  tareas.forEach((t, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = t.tarea;
+    opt.dataset.etiqueta = t.etiqueta;
+    sel.appendChild(opt);
+  });
+}
+
+function renderEtiquetasEnRegistrador(etiquetas) {
+  const sel = document.getElementById('reg-select-etiqueta');
+  if (!sel) return;
+  sel.innerHTML = '';
+  (etiquetas || []).forEach(e => {
+    const opt = document.createElement('option');
+    opt.value       = e;
+    opt.textContent = e;
+    sel.appendChild(opt);
+  });
+}
+
+// Al cambiar tarea, sincronizar etiqueta si la tarea tiene una asignada
+document.addEventListener('DOMContentLoaded', () => {
+  const selTarea = document.getElementById('reg-select-tarea');
+  if (selTarea) {
+    selTarea.addEventListener('change', () => {
+      const opt = selTarea.options[selTarea.selectedIndex];
+      if (opt && opt.dataset.etiqueta) {
+        const selEtiq = document.getElementById('reg-select-etiqueta');
+        if (selEtiq) {
+          for (let i = 0; i < selEtiq.options.length; i++) {
+            if (selEtiq.options[i].value === opt.dataset.etiqueta) {
+              selEtiq.selectedIndex = i;
+              break;
+            }
+          }
+        }
+      }
+    });
+  }
+});
+
+function iniciarTarea() {
+  const selTarea = document.getElementById('reg-select-tarea');
+  const selEtiq  = document.getElementById('reg-select-etiqueta');
+
+  const idxTarea  = selTarea ? selTarea.value : '';
+  const etiqueta  = selEtiq  ? selEtiq.value  : '';
+
+  if (idxTarea === '' || idxTarea === undefined) {
+    mostrarToast('⚠ Seleccioná una tarea para iniciar.');
+    return;
+  }
+
+  const tarea = estado.reg.tareas[parseInt(idxTarea)];
+  if (!tarea) return;
+
+  estado.reg.activo     = true;
+  estado.reg.etiqueta   = etiqueta;
+  estado.reg.tarea      = tarea.tarea;
+  estado.reg.horaInicio = new Date();
+  estado.reg.cicloInicioMs = Date.now();  // v14.0: base real del ciclo
+  estado.reg.segSegundos = 0;
+  estado.reg.cicloNum   = 1;
+
+  // v12.5: crear AudioContext en respuesta a interacción del usuario (evita bloqueo futuro)
+  try {
+    if (!estado.reg.audioCtx) {
+      estado.reg.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } else if (estado.reg.audioCtx.state === 'closed') {
+      estado.reg.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  } catch(e) { /* sin audio */ }
+
+  // Actualizar UI
+  document.getElementById('reg-estado-reposo').style.display = 'none';
+  document.getElementById('reg-estado-activo').style.display = 'block';
+  document.getElementById('reg-tarea-nombre').textContent = etiqueta + ' · ' + tarea.tarea;
+  document.getElementById('reg-ciclo-num').textContent = '1';
+  const btn = document.getElementById('btn-registrador');
+  if (btn) { btn.classList.add("activo"); btn.classList.remove("tarea-corriendo"); }
+
+  // Asegurar panel visible
+  document.getElementById('panel-registrador').classList.add('visible');
+
+  actualizarCronometro();
+  estado.reg.timerId = setInterval(tickRegistrador, 1000);
+  mostrarToast('🍅 Tarea iniciada: ' + tarea.tarea);
+}
+
+function tickRegistrador() {
+  // v14.0 fix: el elapsed se calcula contra el reloj real (Date.now() - cicloInicioMs),
+  // no contando cuántas veces disparó el setInterval. Los navegadores throttlean el
+  // interval agresivamente con la pestaña en 2do plano/minimizada, así que contar ticks
+  // hacía que el ciclo tardara mucho más de 25 min reales (o nunca llegara) y la alarma
+  // nunca sonara.
+  const elapsedSeg = Math.floor((Date.now() - estado.reg.cicloInicioMs) / 1000);
+  estado.reg.segSegundos = Math.min(elapsedSeg, REG_CICLO_SEG);
+
+  // Ciclo de 25 min completado
+  if (elapsedSeg >= REG_CICLO_SEG && estado.reg.timerId) {
+    reproducirAlarma();
+    mostrarNotifCiclo();
+    // No reiniciar automáticamente — esperar acción del usuario
+    clearInterval(estado.reg.timerId);
+    estado.reg.timerId = null;
+  }
+
+  actualizarCronometro();
+}
+
+function actualizarCronometro() {
+  const seg = estado.reg.segSegundos;
+  const m   = Math.floor(seg / 60);
+  const s   = seg % 60;
+  const display = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+
+  const elTiempo = document.getElementById('reg-tiempo');
+  if (elTiempo) elTiempo.textContent = display;
+
+  const pct = Math.min(100, (seg / REG_CICLO_SEG) * 100);
+  const fill = document.getElementById('reg-progress-fill');
+  if (fill) fill.style.width = pct + '%';
+}
+
+const ALARMA_DURACION_SEG = 15;  // v14.1: la alarma anterior duraba ~0.85s, muy corta
+
+function reproducirAlarma() {
+  // v12.5: reutilizar el AudioContext creado en iniciarTarea (evita bloqueo por falta de interacción)
+  // v14.1: se extiende a ALARMA_DURACION_SEG repitiendo la tanda de beeps, en vez de un
+  // único disparo de ~0.85s. Se guardan los timeoutId programados para poder cortarla
+  // en seco con detenerAlarma() si el usuario responde antes de que termine.
+  try {
+    const ctx = estado.reg.audioCtx;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    detenerAlarma();  // por las dudas, no superponer con una tanda anterior
+    const beep = (freq, start, dur) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.4, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    const tanda = (offset) => {
+      beep(880, offset,       0.18);
+      beep(880, offset + 0.22, 0.18);
+      beep(1100, offset + 0.5, 0.35);
+    };
+    // Tandas cada 1.7s cubriendo los ALARMA_DURACION_SEG segundos
+    for (let t = 0; t < ALARMA_DURACION_SEG; t += 1.7) {
+      const id = setTimeout(() => tanda(0), t * 1000);
+      estado.reg.alarmaTimeouts.push(id);
+    }
+  } catch(e) {
+    // AudioContext no disponible, sin alarma sonora
+  }
+}
+
+function detenerAlarma() {
+  // v14.1: cancela las tandas de beeps pendientes (usado al iniciar una nueva alarma
+  // y al responder el aviso de ciclo completado antes de que termine sola)
+  estado.reg.alarmaTimeouts.forEach(id => clearTimeout(id));
+  estado.reg.alarmaTimeouts = [];
+}
+
+const AUTO_CONTINUAR_MS = 60 * 1000;  // v14.1: 1 min fijo sin respuesta → continúa solo
+
+function mostrarNotifCiclo() {
+  // v12.5: si el panel está cerrado, abrirlo para que el usuario vea la notif y escuche la alarma
+  const panel = document.getElementById('panel-registrador');
+  const btn   = document.getElementById('btn-registrador');
+  if (panel && !panel.classList.contains('visible')) {
+    panel.classList.add('visible');
+    if (btn) { btn.classList.add('activo'); btn.classList.remove('tarea-corriendo'); }
+  }
+  const notif = document.getElementById('reg-notif');
+  if (notif) notif.classList.add('visible');
+  // Estado visual esperando decisión
+  document.getElementById('reg-tiempo')?.classList.add('esperando');
+  document.getElementById('reg-progress-fill')?.classList.add('esperando');
+
+  // v14.1: si en 1 min nadie respondió (ni Finalizar ni Continuar), continuar solo
+  // — equivalente a apretar "Continuar". Se cancela en ocultarNotifCiclo() si el
+  // usuario responde antes.
+  estado.reg.autoContinuarId = setTimeout(() => {
+    estado.reg.autoContinuarId = null;
+    mostrarToast('🍅 Sin respuesta — se continuó automáticamente');
+    continuarTarea();
+  }, AUTO_CONTINUAR_MS);
+}
+
+function ocultarNotifCiclo() {
+  document.getElementById('reg-notif')?.classList.remove('visible');
+  document.getElementById('reg-tiempo')?.classList.remove('esperando');
+  document.getElementById('reg-progress-fill')?.classList.remove('esperando');
+  detenerAlarma();  // v14.1: cortar la alarma si el usuario responde antes de los 15s
+  if (estado.reg.autoContinuarId) {
+    clearTimeout(estado.reg.autoContinuarId);  // v14.1: cancelar auto-continuar si hubo respuesta manual
+    estado.reg.autoContinuarId = null;
+  }
+}
+
+function continuarTarea() {
+  ocultarNotifCiclo();
+  estado.reg.cicloNum++;
+  estado.reg.cicloInicioMs = Date.now();  // v14.0: nueva base real para el ciclo que arranca
+  estado.reg.segSegundos = 0;
+  document.getElementById('reg-ciclo-num').textContent = estado.reg.cicloNum;
+  actualizarCronometro();
+  estado.reg.timerId = setInterval(tickRegistrador, 1000);
+  mostrarToast('🍅 Ciclo ' + estado.reg.cicloNum + ' iniciado');
+}
+
+function cancelarTarea() {
+  ocultarNotifCiclo();
+  clearInterval(estado.reg.timerId);
+  estado.reg.activo = false;
+
+  document.getElementById('reg-estado-activo').style.display = 'none';
+  document.getElementById('reg-estado-reposo').style.display = 'block';
+
+  const btn = document.getElementById('btn-registrador');
+  if (btn) { btn.classList.remove("activo"); btn.classList.remove("tarea-corriendo"); }
+
+  mostrarToast('🍅 Tarea cancelada');
+}
+
+function finalizarTarea() {
+  ocultarNotifCiclo();
+  clearInterval(estado.reg.timerId);
+
+  const ahora     = new Date();
+  const horaInicio = estado.reg.horaInicio;
+  const hh = String(horaInicio.getHours()).padStart(2,'0');
+  const mm = String(horaInicio.getMinutes()).padStart(2,'0');
+  const horaInicioStr = hh + ':' + mm;
+
+  // Calcular duración total en minutos (redondeada a opción más cercana de DURACION_OPTS)
+  const durTotalMin = Math.max(1, Math.round((ahora - horaInicio) / 60000));
+  // Buscar la opción de duración más cercana
+  let durIdx = 0;
+  let menorDif = Infinity;
+  DURACION_OPTS.forEach((opt, i) => {
+    const dif = Math.abs(opt.min - durTotalMin);
+    if (dif < menorDif) { menorDif = dif; durIdx = i; }
+  });
+
+  // v15.0: el Registrador se comporta como siempre (carga una nota NUEVA). Si había una
+  // edición abierta, se cierra: sus cambios sin guardar se pierden, la nota original no se toca.
+  if (estado.editando) { salirModoEdicionUI(); desactivarFecha(); }
+
+  // Pre-cargar anotador
+  const etiqueta = estado.reg.etiqueta;
+  const tarea    = estado.reg.tarea;
+
+  // Seleccionar etiqueta en el anotador
+  const chips = document.querySelectorAll('.etiq-chip');
+  chips.forEach(c => {
+    if (c.textContent === etiqueta) seleccionarEtiqueta(etiqueta, c);
+  });
+
+  // Activar toggle horario y fijar hora/duración (fix e)
+  estado.horarioActivo = true;
+  const toggleEl = document.getElementById('toggle-horario');
+  if (toggleEl) {
+    toggleEl.checked = true;
+    // Fijar hora inicio: calcular slot más cercano hacia abajo (fix: indexOf falla con horas exactas no en el array)
+    const [_hh, _mm] = horaInicioStr.split(':').map(Number);
+    estado.horaIdx   = Math.floor((_hh * 60 + _mm) / 15) % HORA_SLOTS.length;
+    estado.duracionIdx = durIdx;
+    actualizarPickerDisplay();
+    document.getElementById('horario-selectores').classList.add('visible');
+  }
+
+  // v14.0: el contenido del anotador se reemplaza por el de la tarea finalizada;
+  // cualquier borrador local anterior queda obsoleto
+  limpiarDraftLocal();
+
+  // Escribir tarea en Quill + registro Pomodoro en itálica (v12.5)
+  if (estado.quill) {
+    estado.quill.setContents([]);
+    estado.quill.insertText(0, tarea);
+    // Calcular hora fin real
+    const ahoraHH  = String(ahora.getHours()).padStart(2,'0');
+    const ahoraMM  = String(ahora.getMinutes()).padStart(2,'0');
+    const horaFinStr = ahoraHH + ':' + ahoraMM;
+    const pomLabel = `\n[${horaInicioStr} → ${horaFinStr}, ${durTotalMin} min]`;
+    const pos = estado.quill.getLength() - 1;
+    estado.quill.insertText(pos, pomLabel, { italic: true, color: '#64748b' });
+  }
+
+  // Resetear registrador
+  estado.reg.activo = false;
+  document.getElementById('reg-estado-activo').style.display = 'none';
+  document.getElementById('reg-estado-reposo').style.display = 'block';
+  document.getElementById('panel-registrador').classList.remove('visible');
+  const btn = document.getElementById('btn-registrador');
+  if (btn) { btn.classList.remove("activo"); btn.classList.remove("tarea-corriendo"); }
+
+  actualizarEstadoEditar();  // v15.0: el Anotador ahora tiene texto → ✏️ desactivados
+  mostrarToast('🍅 Tarea finalizada — anotador listo para guardar');
+
+  // Llevar foco al anotador
+  if (estado.quill) setTimeout(() => estado.quill.focus(), 100);
+}
+
+/* ──────────────────────────────────────────────
+   UTILS
+────────────────────────────────────────────── */
+function mostrarToast(msg, dur = 3200) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+function formatearHora(fechaHoraStr) {
+  if (!fechaHoraStr) return '';
+  try {
+    const d = new Date(fechaHoraStr.replace(' ', 'T'));
+    // v15.0: hourCycle h23 → "19:00" (es-AR en Chrome daba "07:00 p. m."; fix anotado en Handoff_Supabase)
+    return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  } catch { return String(fechaHoraStr).slice(11, 16) || ''; }
+}
+
+function fechaHoyStr() {
+  return fechaLocalStr(new Date());
+}
+
+// v15.0: 'yyyy-mm-dd' en hora local (Argentina) de cualquier Date
+function fechaLocalStr(d) {
+  return d.getFullYear() + '-'
+    + String(d.getMonth() + 1).padStart(2, '0') + '-'
+    + String(d.getDate()).padStart(2, '0');
+}
+
+// v15.0: Supabase devuelve como máximo 1000 filas por consulta → paginar
+async function traerTodo(armarConsulta, tam = 1000) {
+  const filas = [];
+  for (let desde = 0; ; desde += tam) {
+    const { data, error } = await armarConsulta().range(desde, desde + tam - 1);
+    if (error) throw error;
+    filas.push(...data);
+    if (data.length < tam) return filas;
+  }
+}
+
+// v15.0: mensaje legible para errores de Supabase / red
+function textoError(err) {
+  const m = (err && (err.message || err.msg)) || String(err);
+  if (/JWT|session|token/i.test(m)) return 'La sesión venció. Volvé a ingresar.';
+  if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Sin conexión con la base.';
+  if (/row-level security|permission denied|42501/i.test(m)) return 'Sin permiso para esa operación.';
+  return m;
+}
+
+/* ──────────────────────────────────────────────
+   REFRÁN DEL DÍA — v15.0 (antes lo elegía el GAS; misma lista y lógica)
+────────────────────────────────────────────── */
+const REFRANES = [
+  'No dejes para mañana lo que puedes hacer hoy.', 'El tiempo es oro.', 'Quien mucho abarca, poco aprieta.',
+  'A mal tiempo, buena cara.', 'Más vale tarde que nunca.', 'El que madruga, Dios lo ayuda.',
+  'En boca cerrada no entran moscas.', 'No hay mal que por bien no venga.',
+  'Camarón que se duerme, se lo lleva la corriente.', 'A caballo regalado no se le miran los dientes.',
+  'Dime con quién andas y te diré quién eres.', 'Ojos que no ven, corazón que no siente.',
+  'Más vale pájaro en mano que ciento volando.', 'Al mal paso darle prisa.', 'No todo lo que brilla es oro.',
+  'Agua que no has de beber, déjala correr.', 'El hábito no hace al monje.', 'A Dios rogando y con el mazo dando.',
+  'Poco a poco se va lejos.', 'El que no arriesga, no gana.', 'La práctica hace al maestro.', 'Errando se aprende.',
+  'El tiempo todo lo cura.', 'Donde hay gana, hay maña.', 'Lo cortés no quita lo valiente.',
+  'Quien siembra vientos, recoge tempestades.', 'Un clavo saca a otro clavo.', 'Haz el bien sin mirar a quién.',
+  'Más vale prevenir que curar.', 'La unión hace la fuerza.', 'No hay peor ciego que el que no quiere ver.',
+  'Cada oveja con su pareja.', 'Lo que bien empieza, bien acaba.', 'Mente sana en cuerpo sano.',
+  'La experiencia es la madre de la ciencia.', 'Renovarse o morir.', 'El saber no ocupa lugar.',
+  'A grandes males, grandes remedios.', 'Los árboles no dejan ver el bosque.', 'El camino se hace al andar.',
+  'Nadie es profeta en su tierra.', 'La curiosidad mató al gato.', 'El mejor remedio es la paciencia.',
+  'Piensa antes de hablar.', 'No hay atajo sin trabajo.', 'Las palabras se las lleva el viento.', 'Un paso a la vez.',
+  'La constancia es la clave del éxito.', 'Hoy es el primer día del resto de tu vida.',
+  'La simplicidad es la máxima sofisticación.', 'Haz lo que puedas, con lo que tengas, donde estés.',
+  'El foco es la diferencia entre lo bueno y lo excelente.', 'La claridad precede a la maestría.',
+  'Cada sistema está perfectamente diseñado para obtener los resultados que obtiene.',
+  'Lo urgente rara vez es importante; lo importante rara vez es urgente.', 'La energía sigue al foco.',
+  'Una decisión bien tomada vale más que diez apuradas.', 'El contexto es todo.', 'Documenta mientras recuerdas.',
+  'La mejor herramienta es la que usas.', 'Todo sistema mejora con el tiempo si le prestas atención.',
+  'Lo que no se mide, no se gestiona.', 'Cada nota de hoy es un mapa para mañana.',
+  'La memoria es limitada; el registro es ilimitado.', 'Haz de cada día una obra maestra.', 'La disciplina es libertad.',
+  'Mejor hecho que perfecto.',
+];
+
+function refranDelDia() {
+  const hoy    = new Date();
+  const inicio = new Date(hoy.getFullYear(), 0, 0);
+  const diaAno = Math.floor((hoy - inicio) / (1000 * 60 * 60 * 24));
+  return REFRANES[diaAno % REFRANES.length];
+}
+
+function fechaHoyFormateada() {
+  return new Date().toLocaleDateString('es-AR', {
+    weekday: 'long', day: 'numeric', month: 'long'
+  });
+}
+
+function formatearFechaStr(fechaStr) {
+  if (!fechaStr) return '';
+  try {
+    const d = new Date(fechaStr + 'T12:00:00');
+    return d.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+  } catch { return fechaStr; }
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function bgParaColor(colorId) {
+  return (POSTIT_COLORS.find(c => c.id === colorId) || POSTIT_COLORS[0]).bg;
+}
+
+/* ──────────────────────────────────────────────
+   BADGE HOY — v11
+────────────────────────────────────────────── */
+function actualizarBadgeHoy(cantNotas) {
+  const badge = document.getElementById('badge-hoy');
+  if (!badge) return;
+  if (cantNotas > 0) {
+    badge.textContent = cantNotas > 99 ? '99+' : String(cantNotas);
+    badge.classList.add('visible');
+  } else {
+    badge.classList.remove('visible');
+  }
+}
+
+/* ──────────────────────────────────────────────
+   NAVEGACIÓN DE FECHAS
+────────────────────────────────────────────── */
+function actualizarFechaPanel() {
+  const esHoy = !estado.fechaVista || estado.fechaVista === fechaHoyStr();
+
+  const labelEl = document.getElementById('today-label-txt');
+  const fechaEl = document.getElementById('fecha-hoy');
+
+  if (esHoy) {
+    if (labelEl) labelEl.textContent = 'HOY';
+    if (fechaEl) fechaEl.textContent = fechaHoyFormateada();
+  } else {
+    if (labelEl) labelEl.textContent = formatearFechaStr(estado.fechaVista);
+    if (fechaEl) fechaEl.textContent = '';
+  }
+
+  const panelRight = document.getElementById('panel-right');
+  if (panelRight) panelRight.classList.toggle('es-pasado', !esHoy);
+
+  actualizarBotonesNav();
+}
+
+function actualizarBotonesNav() {
+  const btnAnt = document.getElementById('btn-fecha-ant');
+  const btnSig = document.getElementById('btn-fecha-sig');
+  if (!btnAnt || !btnSig) return;
+
+  const hoy   = fechaHoyStr();
+  const vista = estado.fechaVista || hoy;
+
+  btnAnt.disabled = !estado.fechasConNotas.some(f => f < vista);
+  btnSig.disabled = !estado.fechasConNotas.some(f => f > vista) || vista >= hoy;
+}
+
+async function navegarFecha(dir) {
+  const hoy   = fechaHoyStr();
+  const vista = estado.fechaVista || hoy;
+  const fechas = estado.fechasConNotas.slice().sort();
+
+  let nuevaFecha;
+  if (dir === -1) {
+    const anteriores = fechas.filter(f => f < vista);
+    if (!anteriores.length) return;
+    nuevaFecha = anteriores[anteriores.length - 1];
+  } else {
+    const siguientes = fechas.filter(f => f > vista);
+    if (!siguientes.length) return;
+    nuevaFecha = siguientes[0];
+  }
+
+  estado.fechaVista = nuevaFecha === hoy ? null : nuevaFecha;
+  actualizarFechaPanel();
+  await cargarNotasFecha(nuevaFecha);
+}
+
+async function cargarNotasFecha(fecha) {
+  const lista = document.getElementById('notas-list');
+  lista.innerHTML = '<div class="notas-empty"><span class="notas-empty-icon">⏳</span>Cargando…</div>';
+  try {
+    const [notas, fechas] = await Promise.all([leerNotasDe(fecha), leerFechasConNotas()]);
+    estado.fechasConNotas = fechas;
+    actualizarBotonesNav();
+    renderNotasHoy(notas);
+  } catch(err) {
+    lista.innerHTML = '<div class="notas-empty"><span class="notas-empty-icon">⚠️</span>Error al cargar.</div>';
+    console.error('Error cargarNotasFecha:', err);
+  }
+}
+
+/* ──────────────────────────────────────────────
+   AUTENTICACIÓN — v15.0: Supabase Auth con código por mail
+   (pwa_pin nuevo; flujo copiado de prekom_auth_test_v0_1_0)
+────────────────────────────────────────────── */
+let emailPendiente = '';
+let appIniciada    = false;
+
+function mostrarPasoLogin(paso) {
+  document.getElementById('login-paso-email').hidden  = paso !== 'email';
+  document.getElementById('login-paso-codigo').hidden = paso !== 'codigo';
+}
+
+function mostrarLoginMsg(id, tipo, texto) {
+  const el = document.getElementById(id);
+  el.className   = 'login-msg ' + (tipo || '');
+  el.textContent = texto || '';
+}
+
+function traducirErrorAuth(err) {
+  const m = (err && (err.message || err.msg)) || String(err);
+  if (/rate limit|too many|security purposes/i.test(m)) return 'Demasiados pedidos de código seguidos. Esperá un minuto y probá de nuevo.';
+  if (/expired|invalid/i.test(m)) return 'Código incorrecto o vencido.';
+  return m;
+}
+
+function mostrarLogin() {
+  document.getElementById('app').style.display           = 'none';
+  document.getElementById('denied-screen').style.display = 'none';
+  document.getElementById('login-screen').style.display  = 'flex';
+  const inp = document.getElementById('login-email');
+  if (!inp.value) inp.value = EMAIL_SUGERIDO;
+  mostrarPasoLogin('email');
+}
+
+// PASO 1: pedir código
+async function enviarCodigo() {
+  const email = document.getElementById('login-email').value.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { mostrarLoginMsg('login-msg-email', 'error', 'Ingresá un email válido.'); return; }
+  const btn = document.getElementById('login-btn-enviar');
+  btn.disabled = true;
+  mostrarLoginMsg('login-msg-email', 'info', 'Enviando código…');
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  btn.disabled = false;
+  if (error) { console.error('[signInWithOtp]', error); mostrarLoginMsg('login-msg-email', 'error', traducirErrorAuth(error)); return; }
+  emailPendiente = email;
+  mostrarLoginMsg('login-msg-email', '', '');
+  mostrarLoginMsg('login-msg-codigo', '', '');
+  document.getElementById('login-email-enviado').textContent = email;
+  document.getElementById('login-codigo').value = '';
+  mostrarPasoLogin('codigo');
+  document.getElementById('login-codigo').focus();
+}
+
+// PASO 2: validar código
+async function validarCodigo() {
+  const token = document.getElementById('login-codigo').value.replace(/\D/g, '');
+  if (token.length < 6) { mostrarLoginMsg('login-msg-codigo', 'error', 'El código tiene al menos 6 dígitos.'); return; }
+  const btn = document.getElementById('login-btn-validar');
+  btn.disabled = true;
+  mostrarLoginMsg('login-msg-codigo', 'info', 'Validando…');
+  const { data, error } = await sb.auth.verifyOtp({ email: emailPendiente, token, type: 'email' });
+  btn.disabled = false;
+  if (error) { console.error('[verifyOtp]', error); mostrarLoginMsg('login-msg-codigo', 'error', traducirErrorAuth(error)); return; }
+  mostrarLoginMsg('login-msg-codigo', '', '');
+  await entrarConSesion(data.session);
+}
+
+// Sesión válida → ¿el mail está habilitado en mdt_usuarios?
+async function entrarConSesion(session) {
+  const email = (session.user.email || '').toLowerCase();
+  const { data, error } = await sb.from('mdt_usuarios').select('email, nombre, activo').eq('email', email).maybeSingle();
+  if (error) {
+    console.error('[mdt_usuarios]', error);
+    mostrarLogin();
+    mostrarLoginMsg('login-msg-email', 'error', 'No se pudo verificar el acceso: ' + textoError(error));
+    return;
+  }
+  if (!data || !data.activo) {
+    document.getElementById('login-screen').style.display  = 'none';
+    document.getElementById('app').style.display           = 'none';
+    document.getElementById('denied-screen').style.display = 'flex';
+    document.getElementById('denied-email-display').textContent = email;
+    return;
+  }
+  estado.usuario = { email, nombre: data.nombre || email };
+  iniciarApp();
+}
+
+// Cierre de sesión LOCAL: solo este dispositivo (la del celular/desktop sigue activa)
+async function cerrarSesion() {
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { console.warn('[signOut]', e); }
+  estado.usuario = null;
+  if (estado.refrescoId) clearInterval(estado.refrescoId);
+  appIniciada = false;
+  mostrarLogin();
+}
+
+function confirmarCerrarSesion() {
+  if (confirm(`¿Cerrar la sesión de ${estado.usuario?.email || ''} en este dispositivo?`)) cerrarSesion();
+}
+
+// ── Arranque principal ────────────────────────────────────────
+window.onload = async function() {
+  document.getElementById('login-btn-enviar').addEventListener('click', enviarCodigo);
+  document.getElementById('login-email').addEventListener('keydown', e => { if (e.key === 'Enter') enviarCodigo(); });
+  document.getElementById('login-btn-validar').addEventListener('click', validarCodigo);
+  document.getElementById('login-codigo').addEventListener('keydown', e => { if (e.key === 'Enter') validarCodigo(); });
+  document.getElementById('login-btn-volver').addEventListener('click', () => mostrarPasoLogin('email'));
+  renderBotonGuardar();
+
+  // Sesión guardada (supabase-js la persiste y la renueva sola) → entrar directo
+  const { data } = await sb.auth.getSession();
+  if (data.session) await entrarConSesion(data.session); else mostrarLogin();
+
+  // Si la sesión se cierra o vence sin poder renovarse, volver al login
+  sb.auth.onAuthStateChange((evento) => {
+    if (evento === 'SIGNED_OUT' && appIniciada) {
+      appIniciada = false;
+      mostrarLogin();
+      mostrarLoginMsg('login-msg-email', 'info', 'La sesión se cerró. Pedí un código nuevo para entrar.');
+    }
+  });
+};
+
+/* ──────────────────────────────────────────────
+   INICIO
+────────────────────────────────────────────── */
+function iniciarApp() {
+  document.getElementById('login-screen').style.display  = 'none';
+  document.getElementById('denied-screen').style.display = 'none';
+  document.getElementById('app').style.display           = 'flex';
+
+  const av = document.getElementById('hdr-avatar');
+  av.textContent = (estado.usuario.nombre || estado.usuario.email).trim().charAt(0).toUpperCase();
+  av.title = `${estado.usuario.email} — click para cerrar sesión`;
+
+  const r = '«' + refranDelDia() + '»';
+  document.getElementById('hdr-refran').textContent = r;
+  document.getElementById('refran-box').textContent = r;
+
+  if (appIniciada) return;   // ya estaba corriendo (p. ej. sesión renovada)
+  appIniciada = true;
+
+  estado.fechaVista = null;
+  actualizarFechaPanel();
+
+  iniciarQuill();
+  iniciarResizers();
+  iniciarTabsMobile();
+  iniciarBottomSheet();
+  cargarDatos(false);
+  cargarPostits();
+
+  // v15.0: sin keep-alive (Supabase no tiene arranque en frío). Refresco cada 15 min.
+  if (estado.refrescoId) clearInterval(estado.refrescoId);
+  estado.refrescoId = setInterval(() => {
+    cargarDatos(false);
+    cargarPostits();
+  }, 15 * 60 * 1000);
+}
+
+/* ──────────────────────────────────────────────
+   QUILL
+────────────────────────────────────────────── */
+function iniciarQuill() {
+  if (estado.quill) return;
+  estado.quill = new Quill('#quill-editor', {
+    theme      : 'snow',
+    placeholder: 'Escribí tu nota acá… (soporta negrita, cursiva, listas)',
+    modules    : {
+      toolbar: [
+        ['bold', 'italic', 'underline'],
+        [{ list: 'ordered' }, { list: 'bullet' }],
+        ['link'],
+        ['clean']
+      ]
+    }
+  });
+  const container = document.querySelector('#quill-host .ql-container');
+  if (container) { container.style.flex = '1'; container.style.overflow = 'auto'; }
+
+  // v14.0: autoguardar borrador local ante cualquier cambio de texto (debounced)
+  estado.quill.on('text-change', (delta, oldDelta, source) => {
+    if (source === 'user') programarGuardadoDraft();
+    actualizarEstadoEditar();   // v15.0: ✏️ se desactivan apenas hay texto
+  });
+}
+
+/* ──────────────────────────────────────────────
+   RESIZERS
+────────────────────────────────────────────── */
+function iniciarResizers() {
+  configurarResizer('resizer-left',  'panel-left', 'postit-col', 'horizontal');
+  configurarResizer('resizer-right', 'postit-col', null,         'horizontal');
+}
+
+function configurarResizer(resizerId, panelIzqId, panelDerId, _dir) {
+  const resizer  = document.getElementById(resizerId);
+  const panelIzq = document.getElementById(panelIzqId);
+  if (!resizer || !panelIzq) return;
+
+  let startX, startWIzq;
+
+  resizer.addEventListener('mousedown', e => {
+    startX    = e.clientX;
+    startWIzq = panelIzq.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(e) {
+      const dx   = e.clientX - startX;
+      if (panelDerId === 'postit-col') {
+        panelIzq.style.width = Math.max(280, startWIzq + dx) + 'px';
+      } else {
+        const newW = Math.max(
+          parseInt(getComputedStyle(document.documentElement).getPropertyValue('--postit-min')),
+          Math.min(
+            parseInt(getComputedStyle(document.documentElement).getPropertyValue('--postit-max')),
+            startWIzq + dx
+          )
+        );
+        panelIzq.style.width = newW + 'px';
+      }
+    }
+    function onUp() {
+      resizer.classList.remove('dragging');
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  });
+}
+
+/* ──────────────────────────────────────────────
+   CARGAR DATOS — v15.0: Supabase directo (todo en paralelo)
+────────────────────────────────────────────── */
+async function leerNotasDe(fecha) {
+  const { data, error } = await sb.from('mdt_notas').select(COLS_NOTA)
+    .eq('fecha', fecha).eq('borrada', false)
+    .order('fecha_hora', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+async function leerFechasConNotas() {
+  const { data, error } = await sb.rpc('mdt_fechas_con_notas');
+  if (error) throw error;
+  return (data || []).map(f => typeof f === 'string' ? f : f.mdt_fechas_con_notas);
+}
+
+async function leerLista(tabla, cols) {
+  const { data, error } = await sb.from(tabla).select(cols).order('orden').order('id');
+  if (error) throw error;
+  return data;
+}
+
+async function cargarDatos(manual = false) {
+  const btnRef = document.getElementById('btn-refresh');
+  const icon   = document.getElementById('refresh-icon');
+  btnRef.disabled = true;
+  icon.parentElement.classList.add('spin');
+
+  try {
+    actualizarFechaPanel();
+    const fecha = estado.fechaVista || fechaHoyStr();
+    const [cfgFilas, etiq, marcas, tareas, herr, notas, fechas] = await Promise.all([
+      sb.from('mdt_config').select('clave, valor').then(r => { if (r.error) throw r.error; return r.data; }),
+      leerLista('mdt_etiquetas', 'id, nombre, orden'),
+      leerLista('mdt_marcas', 'id, nombre, color, orden'),
+      leerLista('mdt_tareas', 'id, tarea, etiqueta, orden'),
+      leerLista('mdt_herramientas', 'id, nombre, url, emoji, orden'),
+      leerNotasDe(fecha),
+      leerFechasConNotas(),
+    ]);
+    const cfg = Object.fromEntries(cfgFilas.map(f => [f.clave, f.valor]));
+    const data = {
+      ok          : true,
+      config      : { nombre: cfg.nombre || 'Mesa de Trabajo', logoEmoji: cfg.logo_emoji || '🗂️' },
+      etiquetas   : etiq.map(e => e.nombre),
+      marcas      : marcas.map(m => ({ nombre: m.nombre, color: m.color })),
+      tareas      : tareas.map(t => ({ tarea: t.tarea, etiqueta: t.etiqueta })),
+      herramientas: herr.map(h => ({ nombre: h.nombre, url: h.url, emoji: h.emoji })),
+      notasVista  : notas,
+      fechasDisponibles: fechas,
+    };
+    estado.datos = data;
+    renderizarDatos(data);
+    if (manual) {
+      cargarPostits();
+      mostrarToast('✓ Datos actualizados');
+    }
+  } catch (err) {
+    console.error('Error cargando datos:', err);
+    mostrarToast('⚠ Error al cargar datos: ' + textoError(err), 5000);
+  } finally {
+    btnRef.disabled = false;
+    icon.parentElement.classList.remove('spin');
+  }
+}
+
+/* ──────────────────────────────────────────────
+   RENDERIZADO
+────────────────────────────────────────────── */
+function renderizarDatos(data) {
+  if (!data || !data.ok) return;
+  const cfg = data.config || {};
+
+  if (cfg.nombre) {
+    document.getElementById('hdr-logo').textContent   = cfg.nombre.toUpperCase();
+    document.getElementById('login-logo').textContent = cfg.nombre.toUpperCase();
+  }
+  if (cfg.logoEmoji) {
+    document.getElementById('hdr-emoji').textContent   = cfg.logoEmoji;
+    document.getElementById('login-emoji').textContent = cfg.logoEmoji;
+  }
+
+  if (data.fechasDisponibles) {
+    estado.fechasConNotas = data.fechasDisponibles;
+    actualizarBotonesNav();
+  }
+
+  renderEtiquetas(data.etiquetas || []);
+
+  // v12: marcas y tareas
+  renderMarcas(data.marcas || []);
+  renderTareasEnRegistrador(data.tareas || []);
+  renderEtiquetasEnRegistrador(data.etiquetas || []);
+
+  renderNotasHoy(data.notasVista || []);
+  actualizarFechaPanel();
+
+  renderToolbar(data.herramientas || []);
+
+  // v14.0: intentar restaurar el borrador local, una sola vez por sesión,
+  // recién acá porque necesita que los chips de etiqueta/marca ya existan en el DOM
+  restaurarDraftLocal();
+}
+
+function renderEtiquetas(etiquetas) {
+  const lista = document.getElementById('etiquetas-list');
+  // v14.0 fix: preservar la etiqueta activa vigente al reconstruir los chips
+  // (antes, Actualizar —auto cada 15min o manual— siempre reseteaba a la primera)
+  const previaActiva = estado.etiqActiva;
+  lista.innerHTML = '';
+  let chipARestaurar = null;
+  etiquetas.forEach(e => {
+    const chip     = document.createElement('button');
+    chip.className = 'etiq-chip';
+    chip.textContent = e;
+    chip.onclick   = () => seleccionarEtiqueta(e, chip);
+    lista.appendChild(chip);
+    if (e === previaActiva) chipARestaurar = chip;
+  });
+  if (chipARestaurar) {
+    // ya había una selección vigente y sigue existiendo en la lista nueva: mantenerla
+    seleccionarEtiqueta(previaActiva, chipARestaurar);
+  } else if (etiquetas.length > 0) {
+    // primera carga, o la etiqueta previa ya no existe en el Sheet: default a la primera
+    seleccionarEtiqueta(etiquetas[0], lista.firstChild);
+  }
+}
+
+function seleccionarEtiqueta(nombre, chip) {
+  document.querySelectorAll('.etiq-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  estado.etiqActiva = nombre;
+  document.getElementById('etiq-seleccionada').textContent = nombre;
+  programarGuardadoDraft();  // v14.0
+}
+
+function renderNotasHoy(notas) {
+  const lista = document.getElementById('notas-list');
+  lista.innerHTML = '';
+  estado.notasVista = notas;   // v15.0: para ✏️ (editarNota busca acá)
+
+  // v11: actualizar badge tab HOY (solo cuenta notas de hoy)
+  const esHoy = !estado.fechaVista || estado.fechaVista === fechaHoyStr();
+  if (esHoy) actualizarBadgeHoy(notas.length);
+
+  if (!notas.length) {
+    lista.innerHTML = `
+      <div class="notas-empty">
+        <span class="notas-empty-icon">📋</span>
+        No hay notas registradas hoy.<br>
+        <small style="color:var(--muted);font-size:.72rem;margin-top:6px;display:block">
+          Escribí tu primera nota en el anotador ←
+        </small>
+      </div>`;
+    return;
+  }
+
+  const COLLAPSE_H  = 80;
+  const SVG_CHEVRON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+
+  notas.forEach(nota => {
+    const card = document.createElement('div');
+    card.className = 'nota-card';
+    card.dataset.id = nota.id;
+    if (estado.editando && estado.editando.id === nota.id) card.classList.add('en-edicion');
+
+    // v15.0: acciones — importadas bloqueadas (🔒); el resto ✏️ editar + 🗑 papelera
+    const acciones = nota.importada
+      ? `<span class="nota-lock" title="Nota importada del Sheet: bloqueada">🔒</span>`
+      : `<button class="nota-accion editar" title="Editar nota">✏️</button>
+         <button class="nota-accion borrar" title="Enviar a la papelera">🗑</button>`;
+    const meta = document.createElement('div');
+    meta.className = 'nota-meta';
+    meta.innerHTML = `
+      <span class="nota-hora">${formatearHora(nota.fecha_hora)}</span>
+      <span class="nota-etiq">${escHtml(nota.etiqueta)}</span>
+      ${nota.editada_en ? '<span class="nota-editada" title="Editada">editada</span>' : ''}
+      <span class="nota-acciones">${acciones}</span>`;
+    if (!nota.importada) {
+      meta.querySelector('.editar').addEventListener('click', () => editarNota(nota.id));
+      meta.querySelector('.borrar').addEventListener('click', () => borrarNota(nota.id, card));
+    }
+    card.appendChild(meta);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'nota-contenido-wrap';
+    wrap.style.transition = 'none';
+    wrap.style.overflow   = 'hidden';
+
+    const contenido = document.createElement('div');
+    contenido.className = 'nota-contenido';
+    contenido.innerHTML = nota.contenido;
+    wrap.appendChild(contenido);
+    card.appendChild(wrap);
+    lista.appendChild(card);
+
+    const fullH = wrap.scrollHeight;
+    if (fullH > COLLAPSE_H) {
+      wrap.style.maxHeight = COLLAPSE_H + 'px';
+      requestAnimationFrame(() => {
+        wrap.style.transition = 'max-height .35s cubic-bezier(.4,0,.2,1)';
+        wrap.classList.add('collapsed');
+      });
+
+      const btn = document.createElement('button');
+      btn.className = 'nota-expand-btn';
+      btn.innerHTML = `${SVG_CHEVRON} Ver más`;
+      let expandido = false;
+      btn.addEventListener('click', () => {
+        expandido = !expandido;
+        if (expandido) {
+          wrap.style.maxHeight = fullH + 'px';
+          wrap.classList.remove('collapsed');
+          btn.classList.add('expanded');
+          btn.innerHTML = `${SVG_CHEVRON} Ver menos`;
+        } else {
+          wrap.style.maxHeight = COLLAPSE_H + 'px';
+          wrap.classList.add('collapsed');
+          btn.classList.remove('expanded');
+          btn.innerHTML = `${SVG_CHEVRON} Ver más`;
+          card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      });
+      card.appendChild(btn);
+    } else {
+      wrap.style.maxHeight = '';
+      wrap.style.overflow  = '';
+    }
+  });
+  actualizarEstadoEditar();   // v15.0
+}
+
+function renderToolbar(herramientas) {
+  const bar = document.getElementById('toolbar');
+  bar.innerHTML = '';
+  if (!herramientas.length) {
+    bar.innerHTML = '<span style="font-size:.72rem;color:var(--muted)">Configurá las herramientas en Supabase (tabla mdt_herramientas)</span>';
+    return;
+  }
+  herramientas.forEach(h => {
+    const a    = document.createElement('a');
+    a.className = 'tool-btn';
+    a.href      = h.url;
+    a.target    = '_blank';
+    a.rel       = 'noopener';
+    a.title     = h.nombre;
+    a.innerHTML = `<span class="tool-emoji">${h.emoji||'🔗'}</span><span class="tool-label">${escHtml(h.nombre)}</span>`;
+    bar.appendChild(a);
+  });
+}
+
+/* ──────────────────────────────────────────────
+   GUARDAR NOTA — v15.0: insert (nueva) o update (modo edición) en mdt_notas.
+   Arma el mismo HTML final que el GAS v13 (línea de horario + cuerpo + pills),
+   así el panel HOY y el Resumen DOCX funcionan igual con notas viejas y nuevas.
+────────────────────────────────────────────── */
+const MARCA_PILL_COLORS = MARCA_COLORS;   // misma paleta que los chips
+
+function construirEtiquetaHorario(horaInicio, durMin) {
+  return `${horaInicio} a ${calcularHoraFin(horaInicio, durMin)} (${durMin} min)`;
+}
+
+function construirPillsMarcasHtml(marcas) {
+  if (!marcas.length) return '';
+  const pills = marcas.map(m => {
+    const c = MARCA_PILL_COLORS[m.color] || MARCA_PILL_COLORS.gray;
+    return `<span class="marca-pill" data-color="${escHtml(m.color)}" style="display:inline-flex;align-items:center;padding:2px 10px;border-radius:99px;background:${c.bg};color:${c.fg};border:1px solid ${c.border};font-size:.7rem;font-weight:600;margin:0 3px 0 0;letter-spacing:.02em;">${escHtml(m.nombre)}</span>`;
+  }).join('');
+  return `<p class="marcas-wrap" style="margin-top:8px;line-height:2;">${pills}</p>`;
+}
+
+// Texto plano (columna texto): líneas del editor + horario en la 2ª línea + [Marca] [Marca]
+function construirTextoPlano(etiquetaHorario, marcas) {
+  const lineas = estado.quill.getText().split('\n').map(l => l.trim()).filter(Boolean);
+  if (etiquetaHorario) lineas.splice(1, 0, etiquetaHorario);
+  let t = lineas.join('\n');
+  if (marcas.length) t += '\n' + marcas.map(m => '[' + m.nombre + ']').join(' ');
+  return t;
+}
+
+async function guardarNota() {
+  if (!estado.quill)   return;
+  if (!estado.usuario) { mostrarToast('⚠ No estás autenticado.'); return; }
+  // v12: semáforo
+  if (estado.guardando) { mostrarToast('⏳ Espera, hay un guardado en curso.'); return; }
+
+  const contenidoEditor = estado.quill.getSemanticHTML();
+  const textoPlano      = estado.quill.getText().trim();
+  if (!textoPlano) { mostrarToast('⚠ La nota está vacía.'); return; }
+
+  const edicion  = estado.editando;
+  const etiqueta = estado.etiqActiva || 'General';
+  const marcas   = estado.marcasActivas.map(m => ({ nombre: m.nombre, color: m.color }));
+  const fecha    = fechaDestino();
+  if (fecha > fechaHoyStr()) { mostrarToast('⚠ No se puede anotar en una fecha futura'); return; }
+
+  // Hora de la nota: la del horario si está activo; si no, en una edición se conserva
+  // la hora original y en una nota nueva es la hora actual.
+  let horaInicio = null, duracionMin = null, hhmm;
+  if (estado.horarioActivo) {
+    horaInicio  = HORA_SLOTS[estado.horaIdx];
+    duracionMin = DURACION_OPTS[estado.duracionIdx].min;
+    hhmm = horaInicio + ':00';
+  } else if (edicion) {
+    const orig = new Date(edicion.fechaHora);
+    hhmm = `${String(orig.getHours()).padStart(2,'0')}:${String(orig.getMinutes()).padStart(2,'0')}:${String(orig.getSeconds()).padStart(2,'0')}`;
+  } else {
+    const ahora = new Date();
+    hhmm = `${String(ahora.getHours()).padStart(2,'0')}:${String(ahora.getMinutes()).padStart(2,'0')}:${String(ahora.getSeconds()).padStart(2,'0')}`;
+  }
+  const fechaHora = new Date(`${fecha}T${hhmm}`).toISOString();   // hora local → UTC
+
+  const etiquetaHorario = horaInicio ? construirEtiquetaHorario(horaInicio, duracionMin) : '';
+  let contenido = contenidoEditor;
+  if (etiquetaHorario) contenido = `<p class="nota-horario">⏱ ${etiquetaHorario}</p>${contenido}`;
+  contenido += construirPillsMarcasHtml(marcas);
+
+  const fila = {
+    fecha, fecha_hora: fechaHora, etiqueta, contenido,
+    contenido_editor: contenidoEditor,
+    texto: construirTextoPlano(etiquetaHorario, marcas),
+    hora_inicio: horaInicio, duracion_min: duracionMin, marcas,
+  };
+
+  const btn = document.getElementById('btn-guardar');
+  estado.guardando = true;
+  btn.disabled     = true;
+  btn.textContent  = 'Guardando…';
+
+  try {
+    const q = edicion
+      ? sb.from('mdt_notas').update(fila).eq('id', edicion.id).select('id')
+      : sb.from('mdt_notas').insert(fila).select('id');
+    const { data, error } = await q;
+    if (error) throw error;
+    if (!data || !data.length) throw new Error('La nota ya no existe o está bloqueada.');
+
+    const horarioMsg = horaInicio ? ` · ${horaInicio} (${DURACION_OPTS[estado.duracionIdx].label})` : '';
+    const marcasMsg  = marcas.length ? ' · ' + marcas.map(m => m.nombre).join(', ') : '';
+    const fechaMsg   = fecha !== fechaHoyStr() ? ' · ' + fecha.split('-').reverse().join('/') : '';
+    mostrarToast((edicion ? '✓ Cambios guardados · ' : '✓ Nota guardada · ') + etiqueta + horarioMsg + marcasMsg + fechaMsg);
+
+    // v15.0: el Anotador vuelve a cero (toggle de fecha SIEMPRE apagado)
+    resetAnotador();
+
+    // El panel HOY salta al día de la nota
+    estado.fechaVista = fecha === fechaHoyStr() ? null : fecha;
+    actualizarFechaPanel();
+    cargarDatos(false);
+  } catch(err) {
+    console.error('Error guardando nota:', err);
+    mostrarToast('⚠ No se pudo guardar: ' + textoError(err), 5000);
+  } finally {
+    estado.guardando = false;
+    btn.disabled = false;
+    renderBotonGuardar();
+  }
+}
+
+/* ──────────────────────────────────────────────
+   v15.0 — PAPELERA: borrar (marca borrada) y restaurar
+────────────────────────────────────────────── */
+async function borrarNota(id, card) {
+  if (estado.editando && estado.editando.id === id) {
+    mostrarToast('⚠ Cancelá la edición antes de borrar esta nota'); return;
+  }
+  card.style.opacity = '.4';
+  const { data, error } = await sb.from('mdt_notas').update({ borrada: true }).eq('id', id).select('id');
+  if (error || !data || !data.length) {
+    card.style.opacity = '';
+    mostrarToast('⚠ No se pudo borrar: ' + textoError(error || 'nota bloqueada'), 5000);
+    return;
+  }
+  mostrarToast('🗑 Nota enviada a la papelera');
+  if (estado.fechaVista) cargarNotasFecha(estado.fechaVista); else cargarDatos(false);
+}
+
+async function abrirPapelera() {
+  document.getElementById('papelera-overlay').classList.add('visible');
+  const lista = document.getElementById('papelera-lista');
+  lista.innerHTML = '<div class="notas-empty">Cargando…</div>';
+  try {
+    const notas = await traerTodo(() => sb.from('mdt_notas')
+      .select('id, fecha, fecha_hora, etiqueta, texto, borrada_en')
+      .eq('borrada', true).order('borrada_en', { ascending: false }));
+    if (!notas.length) {
+      lista.innerHTML = '<div class="notas-empty"><span class="notas-empty-icon">🗑</span>La papelera está vacía.</div>';
+      return;
+    }
+    lista.innerHTML = '';
+    notas.forEach(n => {
+      const it = document.createElement('div');
+      it.className = 'pap-item';
+      it.innerHTML = `
+        <div class="pap-meta">
+          <span>${escHtml(formatearFechaStr(n.fecha))} · ${formatearHora(n.fecha_hora)}</span>
+          <span class="nota-etiq">${escHtml(n.etiqueta)}</span>
+          <button class="pap-restaurar">↩ Restaurar</button>
+        </div>
+        <div class="pap-texto">${escHtml(n.texto)}</div>`;
+      it.querySelector('.pap-restaurar').addEventListener('click', e => restaurarNota(n, e.currentTarget, it));
+      lista.appendChild(it);
+    });
+  } catch (err) {
+    lista.innerHTML = `<div class="notas-empty"><span class="notas-empty-icon">⚠️</span>${escHtml(textoError(err))}</div>`;
+  }
+}
+
+function cerrarPapelera() {
+  document.getElementById('papelera-overlay').classList.remove('visible');
+}
+
+async function restaurarNota(n, btn, item) {
+  btn.disabled = true;
+  const { data, error } = await sb.from('mdt_notas').update({ borrada: false }).eq('id', n.id).select('id');
+  if (error || !data || !data.length) {
+    btn.disabled = false;
+    mostrarToast('⚠ No se pudo restaurar: ' + textoError(error || 'sin filas'), 5000);
+    return;
+  }
+  item.remove();
+  mostrarToast('↩ Nota restaurada en su día (' + n.fecha.split('-').reverse().join('/') + ')');
+  if (!document.querySelector('#papelera-lista .pap-item')) {
+    document.getElementById('papelera-lista').innerHTML =
+      '<div class="notas-empty"><span class="notas-empty-icon">🗑</span>La papelera está vacía.</div>';
+  }
+  if (estado.fechaVista) cargarNotasFecha(estado.fechaVista); else cargarDatos(false);
+}
+
+/* ──────────────────────────────────────────────
+   v15.0 — SINCRONIZAR CALENDARIO (forzado): llama al GAS de sync con la sesión
+────────────────────────────────────────────── */
+async function sincronizarCalendario() {
+  if (!SYNC_GAS_URL) { mostrarToast('⚠ Falta la URL del GAS de sync (SYNC_GAS_URL en el HTML)', 5000); return; }
+  if (estado.syncEnCurso) return;
+  const { data: s } = await sb.auth.getSession();
+  if (!s.session) { mostrarToast('⚠ La sesión venció. Volvé a ingresar.'); return; }
+
+  estado.syncEnCurso = true;
+  const btn = document.getElementById('btn-sync');
+  btn.disabled = true;
+  btn.classList.add('spin');
+  mostrarToast('📅 Sincronizando con Calendar…', 8000);
+  try {
+    let r = null, ultimoError = null;
+    for (let intento = 1; intento <= 2 && !r; intento++) {      // reintento por el 404 de GAS
+      try {
+        const resp = await fetch(SYNC_GAS_URL, {
+          method : 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body   : JSON.stringify({ action: 'sync', token: s.session.access_token }),
+        });
+        const txt = await resp.text();
+        r = JSON.parse(txt);
+      } catch (e) { ultimoError = e; }
+    }
+    if (!r) throw ultimoError || new Error('Sin respuesta del GAS');
+    if (!r.ok) throw new Error(r.error || 'El sync falló');
+    const c = r.resumen || {};
+    const total = (c.creados || 0) + (c.actualizados || 0) + (c.borrados || 0);
+    mostrarToast(total
+      ? `📅 Calendar al día · ${c.creados || 0} creados · ${c.actualizados || 0} actualizados · ${c.borrados || 0} borrados${c.errores ? ' · ⚠ ' + c.errores + ' error(es)' : ''}`
+      : (c.errores ? `⚠ Sync con ${c.errores} error(es) — ver Log_GAS` : '📅 Calendar ya estaba al día'), 5000);
+  } catch (err) {
+    console.error('[sync]', err);
+    mostrarToast('⚠ No se pudo sincronizar: ' + textoError(err) + ' — reintentá en un rato', 6000);
+  } finally {
+    estado.syncEnCurso = false;
+    btn.disabled = false;
+    btn.classList.remove('spin');
+  }
+}
+
+/* ══════════════════════════════════════════════
+   POSTITS
+══════════════════════════════════════════════ */
+async function cargarPostits() {
+  try {
+    // v15.0: orden persistido (columna orden); a igual orden, el más nuevo arriba
+    const { data, error } = await sb.from('mdt_postits')
+      .select('id, texto, color, autor, fecha_hora, orden')
+      .order('orden', { ascending: true }).order('fecha_hora', { ascending: false });
+    if (error) throw error;
+    estado.postits = data.map(p => ({ ...p, fechaHora: p.fecha_hora }));
+    renderPostits();
+  } catch(err) {
+    console.warn('No se pudieron cargar PostIts:', err.message);
+  }
+}
+
+function renderPostits() {
+  const lista = document.getElementById('postit-list');
+  const nuevoForm = lista.querySelector('.postit-nuevo-form');
+  lista.querySelectorAll('.postit-card').forEach(c => c.remove());
+  estado.postits.forEach(pi => lista.appendChild(crearCardPostit(pi)));
+}
+
+function crearCardPostit(pi) {
+  const bg   = bgParaColor(pi.color || 'yellow');
+  const card = document.createElement('div');
+  card.className        = 'postit-card';
+  card.dataset.id       = pi.id;
+  card.style.background = bg;
+  card.draggable        = !esMobile();   // v15.0: en mobile solo se ve el orden
+
+  card.addEventListener('dragstart', e => {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', pi.id);
+    setTimeout(() => card.classList.add('dragging-src'), 0);
+  });
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging-src');
+    document.querySelectorAll('.postit-card').forEach(c =>
+      c.classList.remove('drag-over-top', 'drag-over-bottom'));
+  });
+  card.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect  = card.getBoundingClientRect();
+    document.querySelectorAll('.postit-card').forEach(c =>
+      c.classList.remove('drag-over-top', 'drag-over-bottom'));
+    card.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drag-over-top' : 'drag-over-bottom');
+  });
+  card.addEventListener('dragleave', () =>
+    card.classList.remove('drag-over-top', 'drag-over-bottom'));
+  card.addEventListener('drop', e => {
+    e.preventDefault();
+    card.classList.remove('drag-over-top', 'drag-over-bottom');
+    const idOrigen = e.dataTransfer.getData('text/plain');
+    if (!idOrigen || idOrigen === pi.id) return;
+    const rect    = card.getBoundingClientRect();
+    const antes   = e.clientY < rect.top + rect.height / 2;
+    const idxO    = estado.postits.findIndex(p => p.id === idOrigen);
+    const idxD    = estado.postits.findIndex(p => p.id === pi.id);
+    if (idxO === -1 || idxD === -1) return;
+    const [movido] = estado.postits.splice(idxO, 1);
+    const nuevoIdx = estado.postits.findIndex(p => p.id === pi.id);
+    estado.postits.splice(antes ? nuevoIdx : nuevoIdx + 1, 0, movido);
+    renderPostits();
+    guardarOrdenPostits();   // v15.0: el orden queda guardado
+  });
+
+  // Texto editable
+  const textEl = document.createElement('div');
+  textEl.className   = 'postit-text';
+  textEl.textContent = pi.texto || '';
+  textEl.title       = 'Click para editar';
+  textEl.addEventListener('click', () => {
+    if (textEl.contentEditable !== 'true') {
+      textEl.contentEditable = 'true';
+      textEl.focus();
+      const range = document.createRange();
+      range.selectNodeContents(textEl);
+      range.collapse(false);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    }
+  });
+  textEl.addEventListener('blur', () => {
+    textEl.contentEditable = 'false';
+    const nuevoTexto = textEl.textContent.trim();
+    if (nuevoTexto !== (pi.texto || '').trim() && nuevoTexto) {
+      guardarEdicionPostit(pi.id, nuevoTexto, pi.color || 'yellow', card);
+    } else if (!nuevoTexto) {
+      textEl.textContent = pi.texto || '';
+    }
+  });
+  textEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); textEl.blur(); }
+    if (e.key === 'Escape') { textEl.textContent = pi.texto || ''; textEl.contentEditable = 'false'; }
+  });
+
+  // Colores
+  const coloresEl = document.createElement('div');
+  coloresEl.className = 'postit-colors';
+  POSTIT_COLORS.forEach(c => {
+    const dot = document.createElement('div');
+    dot.className = 'postit-color-dot' + (c.id === (pi.color||'yellow') ? ' selected' : '');
+    dot.style.background = c.bg;
+    dot.title = c.label;
+    dot.addEventListener('click', e => {
+      e.stopPropagation();
+      if (c.id !== pi.color) cambiarColorPostit(pi.id, pi.texto, c.id, card);
+    });
+    coloresEl.appendChild(dot);
+  });
+
+  // Footer
+  const footerEl = document.createElement('div');
+  footerEl.className = 'postit-footer';
+  const autor = pi.autor ? pi.autor.split('@')[0] : '';
+  const hora  = pi.fechaHora ? formatearHora(pi.fechaHora) : '';
+  footerEl.innerHTML = `<span>${escHtml(autor)}</span><span>${hora}</span>`;
+
+  // Borrar
+  const delBtn = document.createElement('button');
+  delBtn.className = 'postit-del';
+  delBtn.innerHTML = '✕';
+  delBtn.title = 'Borrar PostIt';
+  delBtn.addEventListener('click', e => { e.stopPropagation(); borrarPostit(pi.id, card); });
+
+  card.appendChild(delBtn);
+  card.appendChild(textEl);
+  card.appendChild(coloresEl);
+  card.appendChild(footerEl);
+  return card;
+}
+
+/* Formulario inline desktop */
+function mostrarNuevoPostit() {
+  const lista = document.getElementById('postit-list');
+  if (lista.querySelector('.postit-nuevo-form')) return;
+
+  const colorActivo = estado.nuevoPostitColor || 'yellow';
+  const form = document.createElement('div');
+  form.className = 'postit-nuevo-form';
+  form.style.padding = '0';
+
+  const coloresEl = document.createElement('div');
+  coloresEl.className = 'postit-colors';
+  coloresEl.style.marginBottom = '4px';
+
+  const textarea = document.createElement('textarea');
+  textarea.className   = 'postit-new-input';
+  textarea.placeholder = 'Escribí el recordatorio…';
+  textarea.style.background = bgParaColor(colorActivo);
+
+  POSTIT_COLORS.forEach(c => {
+    const dot = document.createElement('div');
+    dot.className = 'postit-color-dot' + (c.id === colorActivo ? ' selected' : '');
+    dot.style.background = c.bg;
+    dot.title = c.label;
+    dot.addEventListener('click', () => {
+      coloresEl.querySelectorAll('.postit-color-dot').forEach(d => d.classList.remove('selected'));
+      dot.classList.add('selected');
+      estado.nuevoPostitColor = c.id;
+      textarea.style.background = c.bg;
+    });
+    coloresEl.appendChild(dot);
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'postit-new-actions';
+
+  const btnOk = document.createElement('button');
+  btnOk.className = 'btn-pi-ok';
+  btnOk.textContent = 'Agregar';
+
+  const btnCancel = document.createElement('button');
+  btnCancel.className = 'btn-pi-cancel';
+  btnCancel.textContent = 'Cancelar';
+
+  btnOk.addEventListener('click', async () => {
+    const texto = textarea.value.trim();
+    if (!texto) { textarea.focus(); return; }
+    if (estado.guardando) return;
+    btnOk.disabled = true;
+    btnOk.textContent = 'Guardando…';
+    await crearPostit(texto, estado.nuevoPostitColor || 'yellow');
+    form.remove();
+  });
+  btnCancel.addEventListener('click', () => form.remove());
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); btnOk.click(); }
+    if (e.key === 'Escape') form.remove();
+  });
+
+  actions.appendChild(btnCancel);
+  actions.appendChild(btnOk);
+  form.appendChild(coloresEl);
+  form.appendChild(textarea);
+  form.appendChild(actions);
+  lista.insertBefore(form, lista.firstChild);
+  textarea.focus();
+}
+
+/* ──────────────────────────────────────────────
+   BOTTOM SHEET — v11
+────────────────────────────────────────────── */
+function iniciarBottomSheet() {
+  // Renderizar dots de color en el bottom sheet
+  const coloresWrap = document.getElementById('bs-colors');
+  coloresWrap.innerHTML = '';
+  POSTIT_COLORS.forEach(c => {
+    const dot = document.createElement('div');
+    dot.className = 'bs-color-dot' + (c.id === estado.bsColor ? ' selected' : '');
+    dot.style.background = c.bg;
+    dot.title = c.label;
+    dot.addEventListener('click', () => {
+      coloresWrap.querySelectorAll('.bs-color-dot').forEach(d => d.classList.remove('selected'));
+      dot.classList.add('selected');
+      estado.bsColor = c.id;
+      document.getElementById('bs-textarea').style.background = c.bg;
+    });
+    coloresWrap.appendChild(dot);
+  });
+}
+
+function abrirBottomSheet() {
+  // Solo en mobile
+  if (!esMobile()) { mostrarNuevoPostit(); return; }
+
+  const sheet   = document.getElementById('postit-bottom-sheet');
+  const overlay = document.getElementById('bs-overlay');
+  const textarea = document.getElementById('bs-textarea');
+
+  // Reset
+  textarea.value = '';
+  textarea.style.background = bgParaColor(estado.bsColor);
+
+  // Mostrar
+  overlay.classList.add('visible');
+  sheet.style.display = 'block';
+  requestAnimationFrame(() => sheet.classList.add('visible'));
+  setTimeout(() => textarea.focus(), 350);
+}
+
+function cerrarBottomSheet() {
+  const sheet   = document.getElementById('postit-bottom-sheet');
+  const overlay = document.getElementById('bs-overlay');
+  sheet.classList.remove('visible');
+  overlay.classList.remove('visible');
+  setTimeout(() => sheet.style.display = 'none', 300);
+}
+
+async function confirmarBottomSheet() {
+  const textarea = document.getElementById('bs-textarea');
+  const texto    = textarea.value.trim();
+  if (!texto) { textarea.focus(); return; }
+  // v12: semáforo
+  if (estado.guardando) return;
+
+  const btnOk = document.getElementById('bs-btn-ok');
+  btnOk.disabled    = true;
+  btnOk.textContent = 'Guardando…';
+
+  await crearPostit(texto, estado.bsColor || 'yellow');
+  cerrarBottomSheet();
+  btnOk.disabled    = false;
+  btnOk.textContent = 'Agregar PostIt';
+}
+
+// Cerrar con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const sheet = document.getElementById('postit-bottom-sheet');
+    if (sheet.classList.contains('visible')) cerrarBottomSheet();
+  }
+});
+
+/* ──────────────────────────────────────────────
+   POSTIT CRUD — v15.0: Supabase directo (mdt_postits)
+────────────────────────────────────────────── */
+async function crearPostit(texto, color) {
+  // v12: semáforo — previene doble submit en 4G
+  if (estado.guardando) return;
+  estado.guardando = true;
+  try {
+    // Nuevo arriba de todo: orden = el menor actual − 1
+    const minOrden = estado.postits.reduce((m, p) => Math.min(m, p.orden ?? 0), 1);
+    const { error } = await sb.from('mdt_postits').insert({ texto, color, orden: minOrden - 1 });
+    if (error) throw error;
+    await cargarPostits();
+    mostrarToast('📌 PostIt agregado');
+  } catch(err) {
+    mostrarToast('⚠ No se pudo guardar el PostIt: ' + textoError(err), 5000);
+    console.error(err);
+  } finally {
+    estado.guardando = false;
+  }
+}
+
+async function guardarEdicionPostit(id, nuevoTexto, color, cardEl) {
+  // v12: semáforo
+  if (estado.guardando) return;
+  estado.guardando = true;
+  cardEl.style.opacity = '0.6';
+  try {
+    const { error } = await sb.from('mdt_postits').update({ texto: nuevoTexto, color }).eq('id', id);
+    if (error) throw error;
+    const pi = estado.postits.find(p => p.id === id);
+    if (pi) pi.texto = nuevoTexto;
+    mostrarToast('✏️ PostIt actualizado');
+  } catch(err) {
+    mostrarToast('⚠ No se pudo editar el PostIt: ' + textoError(err), 5000);
+  } finally {
+    estado.guardando = false;
+    cardEl.style.opacity = '1';
+  }
+}
+
+async function cambiarColorPostit(id, texto, nuevoColor, cardEl) {
+  cardEl.style.background = bgParaColor(nuevoColor);
+  cardEl.querySelectorAll('.postit-color-dot').forEach(d =>
+    d.classList.toggle('selected', d.style.background === bgParaColor(nuevoColor)));
+  try {
+    const { error } = await sb.from('mdt_postits').update({ color: nuevoColor }).eq('id', id);
+    if (error) throw error;
+    const pi = estado.postits.find(p => p.id === id);
+    if (pi) pi.color = nuevoColor;
+  } catch(err) {
+    console.warn('Error cambiando color:', err.message);
+    mostrarToast('⚠ No se pudo cambiar el color: ' + textoError(err));
+  }
+}
+
+async function borrarPostit(id, cardEl) {
+  cardEl.style.transition = 'all .2s ease';
+  cardEl.style.opacity    = '0';
+  cardEl.style.transform  = 'scale(.85)';
+  setTimeout(async () => {
+    cardEl.remove();
+    try {
+      const { error } = await sb.from('mdt_postits').delete().eq('id', id);
+      if (error) throw error;
+      estado.postits = estado.postits.filter(p => p.id !== id);
+      mostrarToast('🗑 PostIt eliminado');
+    } catch(err) {
+      await cargarPostits();
+      mostrarToast('⚠ No se pudo borrar el PostIt: ' + textoError(err), 5000);
+    }
+  }, 200);
+}
+
+// v15.0: guarda el orden actual (1..n) solo en los PostIts que cambiaron de lugar
+async function guardarOrdenPostits() {
+  const cambios = [];
+  estado.postits.forEach((p, i) => {
+    if (p.orden !== i + 1) { p.orden = i + 1; cambios.push({ id: p.id, orden: i + 1 }); }
+  });
+  if (!cambios.length) return;
+  try {
+    const res = await Promise.all(cambios.map(c => sb.from('mdt_postits').update({ orden: c.orden }).eq('id', c.id)));
+    const err = res.find(r => r.error);
+    if (err) throw err.error;
+    mostrarToast('📌 Orden guardado');
+  } catch (err) {
+    mostrarToast('⚠ No se pudo guardar el orden: ' + textoError(err), 5000);
+    await cargarPostits();
+  }
+}
+
+/* ──────────────────────────────────────────────
+   MOBILE TABS — v10.1 + FAB visibility v11
+────────────────────────────────────────────── */
+const TABS = {
+  anotar : 'panel-left',
+  postits: 'postit-col',
+  hoy    : 'panel-right',
+};
+
+function esMobile() { return window.innerWidth <= 720; }
+
+function cambiarTab(tab) {
+  if (!esMobile()) return;
+
+  Object.entries(TABS).forEach(([key, panelId]) => {
+    const panel = document.getElementById(panelId);
+    if (panel) panel.classList.toggle('tab-active', key === tab);
+  });
+  Object.keys(TABS).forEach(key => {
+    const btn = document.getElementById('tab-' + key);
+    if (btn) btn.classList.toggle('active', key === tab);
+  });
+
+  // Mostrar/ocultar FAB según tab activo
+  const fab = document.getElementById('fab-nuevo-postit');
+  if (fab) fab.style.display = (tab === 'postits') ? 'flex' : 'none';
+}
+
+function iniciarTabsMobile() {
+  if (!esMobile()) return;
+  cambiarTab('anotar');
+}
+
+window.addEventListener('resize', () => {
+  if (!esMobile()) {
+    Object.values(TABS).forEach(panelId => {
+      const panel = document.getElementById(panelId);
+      if (panel) panel.classList.remove('tab-active');
+    });
+    // Ocultar FAB en desktop
+    const fab = document.getElementById('fab-nuevo-postit');
+    if (fab) fab.style.display = 'none';
+  } else {
+    const hayActivo = Object.values(TABS).some(id => {
+      const p = document.getElementById(id);
+      return p && p.classList.contains('tab-active');
+    });
+    if (!hayActivo) cambiarTab('anotar');
+  }
+});
+
+/* ──────────────────────────────────────────────
+   PWA
+────────────────────────────────────────────── */
+let deferredInstallPrompt = null;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => console.log('[PWA] SW registrado:', reg.scope))
+      .catch(err => console.warn('[PWA] SW error:', err));
+  });
+}
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById('btn-instalar-pwa');
+  if (btn) btn.style.display = 'flex';
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  const btn = document.getElementById('btn-instalar-pwa');
+  if (btn) btn.style.display = 'none';
+  mostrarToast('✅ App instalada correctamente');
+});
+
+function instalarPWA() {
+  if (!deferredInstallPrompt) {
+    mostrarToast('En iOS: compartir → "Agregar a pantalla de inicio" 📱', 5000);
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  deferredInstallPrompt.userChoice.then(result => {
+    if (result.outcome === 'accepted') mostrarToast('✅ ¡App instalada!');
+    deferredInstallPrompt = null;
+    const btn = document.getElementById('btn-instalar-pwa');
+    if (btn) btn.style.display = 'none';
+  });
+}
+
+/* ──────────────────────────────────────────────
+   RESUMEN DOCX DE NOTAS — v13.0 (desktop only)
+   Parser HTML→DOCX 100% client-side, sobre el
+   Contenido (HTML) tal cual viene de la columna D.
+────────────────────────────────────────────── */
+function abrirResumenModal() {
+  if (esMobile()) return; // desktop only — el botón ya está oculto por CSS
+  document.getElementById('rm-status').textContent = '';
+  document.getElementById('rm-btn-generar').disabled = false;
+  document.getElementById('resumen-overlay').classList.add('visible');
+}
+
+function cerrarResumenModal() {
+  document.getElementById('resumen-overlay').classList.remove('visible');
+}
+
+async function generarResumenDocx() {
+  const btn    = document.getElementById('rm-btn-generar');
+  const status = document.getElementById('rm-status');
+  const fechaDesde = document.getElementById('rm-fecha-desde').value || '';
+  const fechaHasta = document.getElementById('rm-fecha-hasta').value || '';
+  const filtro     = document.getElementById('rm-filtro').value || '';
+
+  btn.disabled = true;
+  status.textContent = 'Buscando notas…';
+
+  try {
+    // v15.0: misma búsqueda que el GAS v13 (rango sobre fecha + AND de palabras sobre
+    // el texto plano, sin mayúsculas), ahora directo en Supabase. Sin borradas.
+    const palabras = filtro.trim().toLowerCase().split(/\s+/).filter(Boolean)
+      .map(w => w.replace(/[\\%_]/g, c => '\\' + c));   // %, _ y \ literales
+    const notasDb = await traerTodo(() => {
+      let q = sb.from('mdt_notas').select('fecha, fecha_hora, etiqueta, contenido')
+        .eq('borrada', false)
+        .order('fecha', { ascending: false }).order('fecha_hora', { ascending: false });
+      if (fechaDesde) q = q.gte('fecha', fechaDesde);
+      if (fechaHasta) q = q.lte('fecha', fechaHasta);
+      palabras.forEach(w => { q = q.ilike('texto', `%${w}%`); });
+      return q;
+    });
+    const data = {
+      ok: true,
+      notas: notasDb.map(n => ({ fecha: n.fecha, fechaHora: n.fecha_hora, etiqueta: n.etiqueta, contenidoHtml: n.contenido })),
+    };
+    if (!data.notas || data.notas.length === 0) {
+      status.textContent = 'No se encontraron notas con ese filtro.';
+      btn.disabled = false;
+      return;
+    }
+
+    status.textContent = `Generando DOCX (${data.notas.length} notas)…`;
+    await construirYDescargarDocx(data.notas);
+
+    status.textContent = `✅ Listo — ${data.notas.length} notas`;
+    btn.disabled = false;
+    setTimeout(cerrarResumenModal, 900);
+
+  } catch (err) {
+    status.textContent = '⚠ Error: ' + err.message;
+    btn.disabled = false;
+  }
+}
+
+// ── Construcción del DOCX (mismos criterios validados en el prototipo) ──
+async function construirYDescargarDocx(notas) {
+  const FONT          = 'Calibri';
+  const SIZE_BODY     = 18;   // 9pt
+  const SIZE_HORARIO  = 17;   // 8.5pt
+  const SIZE_PILL     = 15;   // 7.5pt
+  const SIZE_DAY      = 24;   // 12pt
+  const ORANGE        = 'C2410C';
+  const ORANGE_BG     = 'FFEDD5';
+  const DARK_TEXT     = '1E293B';
+
+  const DIAS  = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+  function fechaLarga(fechaStr) {
+    const [y, m, d] = fechaStr.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return `${DIAS[dt.getDay()]} ${d} de ${MESES[m - 1]} de ${y}`;
+  }
+
+  function inlineToRuns(node, baseOpts) {
+    const runs = [];
+    node.childNodes.forEach(child => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = child.textContent;
+        if (text) runs.push(new docx.TextRun({ text, ...baseOpts }));
+      } else if (child.tagName === 'STRONG' || child.tagName === 'B') {
+        runs.push(new docx.TextRun({ text: child.textContent, bold: true, ...baseOpts }));
+      } else if (child.tagName === 'EM' || child.tagName === 'I') {
+        runs.push(new docx.TextRun({ text: child.textContent, italics: true, ...baseOpts }));
+      } else {
+        const text = child.textContent || '';
+        if (text) runs.push(new docx.TextRun({ text, ...baseOpts }));
+      }
+    });
+    return runs;
+  }
+
+  function pillRun(span) {
+    const style = span.getAttribute('style') || '';
+    const bg = (style.match(/background:\s*#([0-9a-fA-F]{6})/) || [])[1] || 'E2E8F0';
+    const fg = (style.match(/(?<!background-)color:\s*#([0-9a-fA-F]{6})/) || [])[1] || '334155';
+    return new docx.TextRun({
+      text: ` ${span.textContent} `,
+      size: SIZE_PILL, bold: true, color: fg, font: FONT,
+      shading: { type: docx.ShadingType.CLEAR, fill: bg },
+    });
+  }
+
+  function notaToParagraphs(html, etiqueta) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    const paragraphs = [];
+    const pNodes = wrapper.querySelectorAll('p');
+
+    pNodes.forEach(p => {
+      const cls = p.getAttribute('class') || '';
+
+      if (cls.includes('nota-horario')) {
+        paragraphs.push(new docx.Paragraph({
+          spacing: { before: 120, after: 40 },
+          shading: { type: docx.ShadingType.CLEAR, fill: ORANGE_BG },
+          children: [
+            new docx.TextRun({ text: p.textContent, bold: true, color: ORANGE, size: SIZE_HORARIO, font: FONT }),
+            new docx.TextRun({ text: `  [${(etiqueta || '').toUpperCase()}]`, color: DARK_TEXT, size: SIZE_HORARIO, font: FONT }),
+          ],
+        }));
+        return;
+      }
+
+      if (cls.includes('marcas-wrap')) {
+        const spans = p.querySelectorAll('span.marca-pill');
+        if (spans.length === 0) return;
+        paragraphs.push(new docx.Paragraph({
+          spacing: { before: 60, after: 60 },
+          children: Array.from(spans).map(pillRun),
+        }));
+        return;
+      }
+
+      const text = (p.textContent || '').trim();
+      if (text === '') return; // <p></p> vacío: se omite
+
+      paragraphs.push(new docx.Paragraph({
+        spacing: { after: 40 },
+        children: inlineToRuns(p, { size: SIZE_BODY, font: FONT, color: DARK_TEXT }),
+      }));
+    });
+
+    return paragraphs;
+  }
+
+  const children = [];
+  let currentDia = null;
+
+  notas.forEach((nota, i) => {
+    if (nota.fecha !== currentDia) {
+      currentDia = nota.fecha;
+      children.push(new docx.Paragraph({
+        spacing: { before: i === 0 ? 0 : 300, after: 120 },
+        border: { bottom: { color: ORANGE, space: 4, style: docx.BorderStyle.SINGLE, size: 6 } },
+        children: [new docx.TextRun({ text: fechaLarga(nota.fecha).toUpperCase(), bold: true, size: SIZE_DAY, color: ORANGE, font: FONT })],
+      }));
+    } else {
+      children.push(new docx.Paragraph({
+        spacing: { before: 100, after: 0 },
+        border: { top: { color: 'E2E8F0', space: 2, style: docx.BorderStyle.SINGLE, size: 2 } },
+        children: [],
+      }));
+    }
+    children.push(...notaToParagraphs(nota.contenidoHtml, nota.etiqueta));
+  });
+
+  const filename = 'resumen_notas_' + Utilities_formatDateJs(new Date()) + '.docx';
+
+  const doc = new docx.Document({
+    sections: [{
+      properties: { page: { margin: { top: 400, bottom: 400, left: 450, right: 450 } } },
+      footers: {
+        default: new docx.Footer({
+          children: [new docx.Paragraph({
+            alignment: docx.AlignmentType.CENTER,
+            children: [
+              new docx.TextRun({ text: filename, size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ text: '   ·   ', size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ children: [docx.PageNumber.CURRENT], size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ text: ' / ', size: 14, color: '94A3B8', font: FONT }),
+              new docx.TextRun({ children: [docx.PageNumber.TOTAL_PAGES], size: 14, color: '94A3B8', font: FONT }),
+            ],
+          })],
+        }),
+      },
+      children,
+    }],
+  });
+
+  const blob = await docx.Packer.toBlob(doc);
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Formato yyyyMMdd_HHmmss sin depender de Utilities (eso es solo GAS server-side)
+function Utilities_formatDateJs(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+</script>
+</body>
+</html>
